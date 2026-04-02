@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import SetupScreen from "./components/SetupScreen";
 
 type Mode = "duck" | "socrates" | "searching" | "idle";
 
@@ -20,6 +21,7 @@ const modeConfig: Record<Mode, { label: string; color: string; desc: string }> =
 };
 
 export default function Home() {
+  const [configured, setConfigured] = useState<boolean | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [mode, setMode] = useState<Mode>("idle");
   const [isListening, setIsListening] = useState(false);
@@ -39,6 +41,12 @@ export default function Home() {
   useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
+
+  useEffect(() => {
+    fetch("/api/setup")
+      .then((r) => r.json())
+      .then((d) => setConfigured(d.configured));
+  }, []);
 
   const scrollToBottom = () => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -268,6 +276,9 @@ export default function Home() {
   };
 
   const currentMode = modeConfig[mode];
+
+  if (configured === null) return null; // loading
+  if (!configured) return <SetupScreen onComplete={() => setConfigured(true)} />;
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">

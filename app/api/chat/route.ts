@@ -2,10 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 import { writeFile, appendFile, mkdir } from "fs/promises";
 import path from "path";
-
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+import { getConfig } from "@/lib/config";
 
 const SYSTEM_PROMPT = `You are the Socrates Rubber Duck — a bilingual (English/Mandarin) cognitive mirror for deep thinking sessions.
 
@@ -35,7 +32,8 @@ interface RequestBody {
 }
 
 const tavilySearch = async (query: string): Promise<string> => {
-  const apiKey = process.env.TAVILY_API_KEY;
+  const cfg = await getConfig();
+  const apiKey = cfg?.tavilyKey;
   if (!apiKey) return "No search API key configured.";
 
   const res = await fetch("https://api.tavily.com/search", {
@@ -76,6 +74,13 @@ const initSession = async (sessionId: string) => {
 
 export async function POST(req: NextRequest) {
   try {
+    const cfg = await getConfig();
+    if (!cfg?.anthropicKey) {
+      return NextResponse.json({ error: "Not configured" }, { status: 401 });
+    }
+
+    const client = new Anthropic({ apiKey: cfg.anthropicKey });
+
     const body: RequestBody = await req.json();
     const { messages, sessionId, isStuck } = body;
 

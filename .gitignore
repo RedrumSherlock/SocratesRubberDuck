@@ -42,3 +42,6 @@ next-env.d.ts
 
 # sessions (local thinking logs — never commit)
 /sessions/
+
+# local config (API keys — never commit)
+.config.local.json
