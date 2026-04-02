@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Socrates Rubber Duck
 
-## Getting Started
+A bilingual (English/Mandarin) cognitive mirror for deep thinking sessions. Acts as a rubber duck when you're in flow, and a Socrates when your logic slips.
 
-First, run the development server:
+## Requirements
+
+- **Node.js >= 20.9.0** (check with `node -v`; upgrade via [nvm](https://github.com/nvm-sh/nvm) or [nodejs.org](https://nodejs.org))
+- **Bun** or npm/yarn/pnpm
+- Anthropic API key — [console.anthropic.com](https://console.anthropic.com)
+- Tavily API key (for the I'M STUCK web search) — [app.tavily.com](https://app.tavily.com)
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+# 1. Install dependencies
+bun install
+
+# 2. Configure API keys
+cp .env.local.example .env.local
+# Edit .env.local and fill in ANTHROPIC_API_KEY and TAVILY_API_KEY
+
+# 3. Start
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in **Chrome or Edge** (required for Web Speech API).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How it works
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Mode | Indicator | Behavior |
+|------|-----------|----------|
+| DUCK | Green | Listening — minimal backchanneling while you think out loud |
+| SOCRATES | Amber | Detected a logical gap — asks you one sharp question |
+| SEARCHING | Blue | I'M STUCK triggered — fetches live web facts, synthesizes your logic chain |
 
-## Learn More
+- **Mic button** — start/stop voice input (2.5s silence = end of utterance)
+- **I'M STUCK** — reality check: summarizes your reasoning, pulls 2 current facts from the web, asks if your thesis holds
+- **AI Voice toggle** — browser TTS, auto-switches EN/中文
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Sessions are logged locally to `./sessions/thinking_log_[SESSION_ID].md`. Nothing is sent anywhere except the Anthropic and Tavily APIs.
