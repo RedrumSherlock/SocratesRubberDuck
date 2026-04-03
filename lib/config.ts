@@ -1,11 +1,13 @@
-import { readFile, writeFile } from "fs/promises";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
+import os from "os";
 import { type LLMProvider } from "@/lib/providers";
 
 export type { LLMProvider } from "@/lib/providers";
 export { PROVIDER_LABELS, DEFAULT_MODELS, PROVIDER_BASE_URLS } from "@/lib/providers";
 
-const CONFIG_PATH = path.join(process.cwd(), ".config.local.json");
+export const DATA_DIR = path.join(os.homedir(), ".socratesrubberduck");
+const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 
 export interface AppConfig {
   provider: LLMProvider;
@@ -42,6 +44,7 @@ export async function getConfig(): Promise<AppConfig | null> {
 }
 
 export async function saveConfig(config: AppConfig): Promise<void> {
+  await mkdir(DATA_DIR, { recursive: true });
   await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
 }
 

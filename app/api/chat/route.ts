@@ -3,7 +3,7 @@ import OpenAI, { AzureOpenAI } from "openai";
 import { NextRequest, NextResponse } from "next/server";
 import { writeFile, appendFile, mkdir } from "fs/promises";
 import path from "path";
-import { getConfig, DEFAULT_MODELS, PROVIDER_BASE_URLS, type AppConfig } from "@/lib/config";
+import { getConfig, DEFAULT_MODELS, PROVIDER_BASE_URLS, DATA_DIR, type AppConfig } from "@/lib/config";
 
 const SYSTEM_PROMPT = `You are the Socrates Rubber Duck — a bilingual (English/Mandarin) cognitive mirror for deep thinking sessions.
 
@@ -57,7 +57,7 @@ const tavilySearch = async (query: string): Promise<string> => {
 };
 
 const appendToSession = async (sessionId: string, role: string, content: string) => {
-  const sessionsDir = path.join(process.cwd(), "sessions");
+  const sessionsDir = path.join(DATA_DIR, "sessions");
   await mkdir(sessionsDir, { recursive: true });
   const filePath = path.join(sessionsDir, `thinking_log_${sessionId}.md`);
   const timestamp = new Date().toISOString();
@@ -66,7 +66,7 @@ const appendToSession = async (sessionId: string, role: string, content: string)
 };
 
 const initSession = async (sessionId: string) => {
-  const sessionsDir = path.join(process.cwd(), "sessions");
+  const sessionsDir = path.join(DATA_DIR, "sessions");
   await mkdir(sessionsDir, { recursive: true });
   const filePath = path.join(sessionsDir, `thinking_log_${sessionId}.md`);
   const header = `# Socrates Rubber Duck — Thinking Session\nStarted: ${new Date().toISOString()}\nSession ID: ${sessionId}\n\n---\n`;

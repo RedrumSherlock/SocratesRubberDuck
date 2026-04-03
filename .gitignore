@@ -40,8 +40,4 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# sessions (local thinking logs — never commit)
-/sessions/
-
-# local config (API keys — never commit)
-.config.local.json
+# all runtime data lives in ~/.socratesrubberduck/ outside the repo
