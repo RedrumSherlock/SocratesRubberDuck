@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI, { AzureOpenAI } from "openai";
 import { NextRequest, NextResponse } from "next/server";
 import { writeFile, appendFile, mkdir } from "fs/promises";
 import path from "path";
-import { getConfig } from "@/lib/config";
+import { getConfig, DEFAULT_MODELS, PROVIDER_BASE_URLS, type AppConfig } from "@/lib/config";
 
 const SYSTEM_PROMPT = `You are the Socrates Rubber Duck — a bilingual (English/Mandarin) cognitive mirror for deep thinking sessions.
 
@@ -72,14 +73,126 @@ const initSession = async (sessionId: string) => {
   await writeFile(filePath, header, { flag: "wx" }).catch(() => {});
 };
 
+function buildOpenAIClient(cfg: AppConfig): OpenAI {
+  const { provider, apiKey, endpoint } = cfg;
+  if (provider === "azure") {
+    const model = cfg.model?.trim() || DEFAULT_MODELS.azure;
+    return new AzureOpenAI({
+      apiKey,
+      endpoint: endpoint!,
+      apiVersion: "2025-01-01-preview",
+      deployment: model,
+    });
+  }
+  const baseURL = endpoint?.trim() || PROVIDER_BASE_URLS[provider];
+  return new OpenAI({ apiKey, baseURL });
+}
+
+function buildSSEStream(
+  gen: () => AsyncGenerator<string>,
+  onComplete: (text: string) => void
+): ReadableStream {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    async start(controller) {
+      let fullResponse = "";
+      for await (const text of gen()) {
+        fullResponse += text;
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+      }
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+      onComplete(fullResponse);
+    },
+  });
+}
+
+async function streamAnthropicResponse(
+  cfg: AppConfig,
+  messages: Message[],
+  lastContent: string,
+  onComplete: (text: string) => void
+): Promise<ReadableStream> {
+  const client = new Anthropic({ apiKey: cfg.apiKey });
+
+  const anthropicMessages: Anthropic.MessageParam[] = messages.map((m, i) => {
+    const isLast = i === messages.length - 1;
+    if (isLast && m.role === "user") {
+      return {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: lastContent,
+            cache_control: { type: "ephemeral" },
+          } as Anthropic.TextBlockParam & { cache_control: { type: "ephemeral" } },
+        ],
+      };
+    }
+    return { role: m.role, content: m.content };
+  });
+
+  const stream = await client.messages.stream({
+    model: cfg.model?.trim() || DEFAULT_MODELS.anthropic,
+    max_tokens: 1024,
+    system: [
+      {
+        type: "text",
+        text: SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" },
+      } as Anthropic.TextBlockParam & { cache_control: { type: "ephemeral" } },
+    ],
+    messages: anthropicMessages,
+  });
+
+  return buildSSEStream(async function* () {
+    for await (const chunk of stream) {
+      if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+        yield chunk.delta.text;
+      }
+    }
+  }, onComplete);
+}
+
+async function streamOpenAICompatResponse(
+  cfg: AppConfig,
+  messages: Message[],
+  lastContent: string,
+  onComplete: (text: string) => void
+): Promise<ReadableStream> {
+  const client = buildOpenAIClient(cfg);
+  const model = cfg.model?.trim() || DEFAULT_MODELS[cfg.provider];
+
+  const openAIMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    { role: "system", content: SYSTEM_PROMPT },
+    ...messages.slice(0, -1).map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    })),
+    { role: "user" as const, content: lastContent },
+  ];
+
+  const stream = await client.chat.completions.create({
+    model,
+    max_tokens: 1024,
+    stream: true,
+    messages: openAIMessages,
+  });
+
+  return buildSSEStream(async function* () {
+    for await (const chunk of stream) {
+      const text = chunk.choices[0]?.delta?.content;
+      if (text) yield text;
+    }
+  }, onComplete);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const cfg = await getConfig();
-    if (!cfg?.anthropicKey) {
+    if (!cfg?.apiKey) {
       return NextResponse.json({ error: "Not configured" }, { status: 401 });
     }
-
-    const client = new Anthropic({ apiKey: cfg.anthropicKey });
 
     const body: RequestBody = await req.json();
     const { messages, sessionId, isStuck } = body;
@@ -89,83 +202,28 @@ export async function POST(req: NextRequest) {
     const lastUserMsg = messages[messages.length - 1]?.content || "";
     await appendToSession(sessionId, "user", lastUserMsg);
 
-    // Detect topic for stuck search
     const recentText = messages
       .slice(-5)
       .map((m) => m.content)
       .join(" ");
-
-    // Build Anthropic messages with prompt caching
-    const anthropicMessages: Anthropic.MessageParam[] = messages.map((m, i) => {
-      const isLast = i === messages.length - 1;
-      if (isLast && m.role === "user") {
-        return {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: m.content,
-              cache_control: { type: "ephemeral" },
-            } as Anthropic.TextBlockParam & { cache_control: { type: "ephemeral" } },
-          ],
-        };
-      }
-      return { role: m.role, content: m.content };
-    });
 
     let searchResults = "";
     if (isStuck) {
       searchResults = await tavilySearch(recentText.slice(0, 200));
     }
 
-    const userContentWithSearch = isStuck
+    const lastContent = isStuck
       ? `[STUCK]\n\nRecent discussion context: ${recentText.slice(0, 500)}\n\nWeb search results:\n${searchResults}`
       : lastUserMsg;
 
-    // Replace last message with enriched content if stuck
-    if (isStuck) {
-      anthropicMessages[anthropicMessages.length - 1] = {
-        role: "user",
-        content: userContentWithSearch,
-      };
-    }
+    const onComplete = (text: string) => appendToSession(sessionId, "assistant", text);
 
-    const stream = await client.messages.stream({
-      model: "claude-opus-4-6",
-      max_tokens: 1024,
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
-        } as Anthropic.TextBlockParam & { cache_control: { type: "ephemeral" } },
-      ],
-      messages: anthropicMessages,
-    });
+    const stream =
+      cfg.provider === "anthropic"
+        ? await streamAnthropicResponse(cfg, messages, lastContent, onComplete)
+        : await streamOpenAICompatResponse(cfg, messages, lastContent, onComplete);
 
-    // Stream response back
-    const encoder = new TextEncoder();
-    let fullResponse = "";
-
-    const readable = new ReadableStream({
-      async start(controller) {
-        for await (const chunk of stream) {
-          if (
-            chunk.type === "content_block_delta" &&
-            chunk.delta.type === "text_delta"
-          ) {
-            const text = chunk.delta.text;
-            fullResponse += text;
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-          }
-        }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-        await appendToSession(sessionId, "assistant", fullResponse);
-      },
-    });
-
-    return new NextResponse(readable, {
+    return new NextResponse(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",

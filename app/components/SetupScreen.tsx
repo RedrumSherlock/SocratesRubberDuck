@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PROVIDER_LABELS, DEFAULT_MODELS, type LLMProvider } from "@/lib/providers";
 
 interface Props {
   onComplete: () => void;
@@ -8,50 +9,110 @@ interface Props {
 
 type TestState = "idle" | "testing" | "ok" | "error";
 
+const PROVIDERS = Object.entries(PROVIDER_LABELS) as [LLMProvider, string][];
+
+const PROVIDER_KEY_PLACEHOLDERS: Record<LLMProvider, string> = {
+  anthropic: "sk-ant-...",
+  openai: "sk-...",
+  azure: "Azure API key",
+  gemini: "AIza...",
+  litellm: "sk-... (or your LiteLLM key)",
+  xai: "xai-...",
+};
+
+const PROVIDER_KEY_LINKS: Record<LLMProvider, { label: string; url: string }> = {
+  anthropic: { label: "console.anthropic.com ↗", url: "https://console.anthropic.com/settings/keys" },
+  openai: { label: "platform.openai.com ↗", url: "https://platform.openai.com/api-keys" },
+  azure: { label: "Azure Portal ↗", url: "https://portal.azure.com" },
+  gemini: { label: "aistudio.google.com ↗", url: "https://aistudio.google.com/apikey" },
+  litellm: { label: "LiteLLM docs ↗", url: "https://docs.litellm.ai" },
+  xai: { label: "console.x.ai ↗", url: "https://console.x.ai" },
+};
+
 export default function SetupScreen({ onComplete }: Props) {
-  const [anthropicKey, setAnthropicKey] = useState("");
+  const [provider, setProvider] = useState<LLMProvider>("anthropic");
+  const [apiKey, setApiKey] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [model, setModel] = useState("");
   const [tavilyKey, setTavilyKey] = useState("");
-  const [anthropicState, setAnthropicState] = useState<TestState>("idle");
+
+  const [llmState, setLlmState] = useState<TestState>("idle");
   const [tavilyState, setTavilyState] = useState<TestState>("idle");
-  const [anthropicError, setAnthropicError] = useState("");
+  const [llmError, setLlmError] = useState("");
   const [tavilyError, setTavilyError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const testKey = async (type: "anthropic" | "tavily") => {
-    const setState = type === "anthropic" ? setAnthropicState : setTavilyState;
-    const setError = type === "anthropic" ? setAnthropicError : setTavilyError;
-    const key = type === "anthropic" ? anthropicKey : tavilyKey;
+  const needsEndpoint = provider === "azure" || provider === "litellm";
+  const needsModel = provider === "azure" || provider === "litellm";
 
-    if (!key.trim()) return;
-    setState("testing");
-    setError("");
+  const handleProviderChange = (p: LLMProvider) => {
+    setProvider(p);
+    setLlmState("idle");
+    setLlmError("");
+    setModel("");
+    setEndpoint("");
+  };
+
+  const testLLM = async () => {
+    if (!apiKey.trim()) return;
+    setLlmState("testing");
+    setLlmError("");
 
     const res = await fetch("/api/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: `test-${type}`,
-        anthropicKey,
-        tavilyKey,
+        action: "test-llm",
+        provider,
+        apiKey,
+        endpoint: endpoint || undefined,
+        model: model || undefined,
       }),
     });
 
     const data = await res.json();
     if (data.ok) {
-      setState("ok");
+      setLlmState("ok");
     } else {
-      setState("error");
-      setError(data.error || "Key rejected");
+      setLlmState("error");
+      setLlmError(data.error || "Connection failed");
+    }
+  };
+
+  const testTavily = async () => {
+    if (!tavilyKey.trim()) return;
+    setTavilyState("testing");
+    setTavilyError("");
+
+    const res = await fetch("/api/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "test-tavily", tavilyKey }),
+    });
+
+    const data = await res.json();
+    if (data.ok) {
+      setTavilyState("ok");
+    } else {
+      setTavilyState("error");
+      setTavilyError(data.error || "Key rejected");
     }
   };
 
   const handleSave = async () => {
-    if (anthropicState !== "ok" || tavilyState !== "ok") return;
+    if (llmState !== "ok" || tavilyState !== "ok") return;
     setSaving(true);
     const res = await fetch("/api/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "save", anthropicKey, tavilyKey }),
+      body: JSON.stringify({
+        action: "save",
+        provider,
+        apiKey,
+        endpoint: endpoint || undefined,
+        model: model || undefined,
+        tavilyKey,
+      }),
     });
     const data = await res.json();
     if (data.ok) onComplete();
@@ -65,7 +126,9 @@ export default function SetupScreen({ onComplete }: Props) {
     return null;
   };
 
-  const bothOk = anthropicState === "ok" && tavilyState === "ok";
+  const bothOk = llmState === "ok" && tavilyState === "ok";
+  const keyLink = PROVIDER_KEY_LINKS[provider];
+  const defaultModel = DEFAULT_MODELS[provider];
 
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
@@ -73,46 +136,94 @@ export default function SetupScreen({ onComplete }: Props) {
         <div className="text-center mb-10">
           <p className="text-4xl mb-3">🦆</p>
           <h1 className="text-2xl font-semibold text-gray-100">Socrates Rubber Duck</h1>
-          <p className="text-sm text-gray-500 mt-1">Enter your API keys to get started</p>
+          <p className="text-sm text-gray-500 mt-1">Configure your AI provider to get started</p>
         </div>
 
         <div className="space-y-6">
-          {/* Anthropic */}
+          {/* Provider selector */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-1.5">AI Provider</label>
+            <div className="grid grid-cols-3 gap-2">
+              {PROVIDERS.map(([p, label]) => (
+                <button
+                  key={p}
+                  onClick={() => handleProviderChange(p)}
+                  className={`py-2 px-3 rounded-lg text-xs font-medium transition-colors border ${
+                    provider === p
+                      ? "bg-gray-700 border-gray-500 text-gray-100"
+                      : "bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Endpoint (Azure / LiteLLM) */}
+          {needsEndpoint && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1.5">
+                {provider === "azure" ? "Azure Endpoint URL" : "LiteLLM Base URL"}
+              </label>
+              <input
+                type="text"
+                value={endpoint}
+                onChange={(e) => { setEndpoint(e.target.value); setLlmState("idle"); }}
+                placeholder={provider === "azure" ? "https://<resource>.openai.azure.com" : "http://localhost:4000"}
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-500"
+              />
+            </div>
+          )}
+
+          {/* Model override */}
           <div>
             <label className="block text-sm text-gray-400 mb-1.5">
-              Anthropic API Key
+              Model{needsModel ? "" : " (optional)"}
+            </label>
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => { setModel(e.target.value); setLlmState("idle"); }}
+              placeholder={needsModel ? "Required" : defaultModel || "default"}
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-500"
+            />
+            {!needsModel && defaultModel && (
+              <p className="text-xs text-gray-600 mt-1">Default: {defaultModel}</p>
+            )}
+          </div>
+
+          {/* API Key */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-1.5">
+              {PROVIDER_LABELS[provider]} API Key
               <a
-                href="https://console.anthropic.com/settings/keys"
+                href={keyLink.url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="ml-2 text-xs text-gray-600 hover:text-gray-400 underline"
               >
-                console.anthropic.com ↗
+                {keyLink.label}
               </a>
             </label>
             <div className="flex gap-2">
               <input
                 type="password"
-                value={anthropicKey}
-                onChange={(e) => {
-                  setAnthropicKey(e.target.value);
-                  setAnthropicState("idle");
-                }}
-                placeholder="sk-ant-..."
+                value={apiKey}
+                onChange={(e) => { setApiKey(e.target.value); setLlmState("idle"); }}
+                placeholder={PROVIDER_KEY_PLACEHOLDERS[provider]}
                 className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-500"
               />
               <button
-                onClick={() => testKey("anthropic")}
-                disabled={!anthropicKey.trim() || anthropicState === "testing"}
+                onClick={testLLM}
+                disabled={!apiKey.trim() || (needsEndpoint && !endpoint.trim()) || (needsModel && !model.trim()) || llmState === "testing"}
                 className="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-sm text-gray-300 rounded-lg transition-colors whitespace-nowrap"
               >
                 Test
               </button>
             </div>
-            <div className="mt-1.5 text-xs h-4">{stateIcon(anthropicState)}</div>
-            {anthropicError && (
-              <p className="text-xs text-red-400 mt-1">{anthropicError}</p>
-            )}
+            <div className="mt-1.5 text-xs h-4">{stateIcon(llmState)}</div>
+            {llmError && <p className="text-xs text-red-400 mt-1">{llmError}</p>}
           </div>
 
           {/* Tavily */}
@@ -132,15 +243,12 @@ export default function SetupScreen({ onComplete }: Props) {
               <input
                 type="password"
                 value={tavilyKey}
-                onChange={(e) => {
-                  setTavilyKey(e.target.value);
-                  setTavilyState("idle");
-                }}
+                onChange={(e) => { setTavilyKey(e.target.value); setTavilyState("idle"); }}
                 placeholder="tvly-..."
                 className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-500"
               />
               <button
-                onClick={() => testKey("tavily")}
+                onClick={testTavily}
                 disabled={!tavilyKey.trim() || tavilyState === "testing"}
                 className="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-sm text-gray-300 rounded-lg transition-colors whitespace-nowrap"
               >
@@ -148,9 +256,7 @@ export default function SetupScreen({ onComplete }: Props) {
               </button>
             </div>
             <div className="mt-1.5 text-xs h-4">{stateIcon(tavilyState)}</div>
-            {tavilyError && (
-              <p className="text-xs text-red-400 mt-1">{tavilyError}</p>
-            )}
+            {tavilyError && <p className="text-xs text-red-400 mt-1">{tavilyError}</p>}
           </div>
 
           <button

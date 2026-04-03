@@ -1,24 +1,41 @@
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
+import { type LLMProvider } from "@/lib/providers";
+
+export type { LLMProvider } from "@/lib/providers";
+export { PROVIDER_LABELS, DEFAULT_MODELS, PROVIDER_BASE_URLS } from "@/lib/providers";
 
 const CONFIG_PATH = path.join(process.cwd(), ".config.local.json");
 
 export interface AppConfig {
-  anthropicKey: string;
+  provider: LLMProvider;
+  apiKey: string;
+  endpoint?: string; // required for azure and litellm
+  model?: string;    // optional model override
   tavilyKey: string;
 }
 
 export async function getConfig(): Promise<AppConfig | null> {
-  // Prefer env vars (e.g. if someone sets them manually)
+  // Backward-compat: env vars for Anthropic
   if (process.env.ANTHROPIC_API_KEY && process.env.TAVILY_API_KEY) {
     return {
-      anthropicKey: process.env.ANTHROPIC_API_KEY,
+      provider: "anthropic",
+      apiKey: process.env.ANTHROPIC_API_KEY,
       tavilyKey: process.env.TAVILY_API_KEY,
     };
   }
   try {
     const raw = await readFile(CONFIG_PATH, "utf8");
-    return JSON.parse(raw) as AppConfig;
+    const parsed = JSON.parse(raw);
+    // Backward-compat: old config had anthropicKey field
+    if (parsed.anthropicKey && !parsed.apiKey) {
+      return {
+        provider: "anthropic",
+        apiKey: parsed.anthropicKey,
+        tavilyKey: parsed.tavilyKey ?? "",
+      };
+    }
+    return parsed as AppConfig;
   } catch {
     return null;
   }
@@ -30,5 +47,8 @@ export async function saveConfig(config: AppConfig): Promise<void> {
 
 export async function isConfigured(): Promise<boolean> {
   const cfg = await getConfig();
-  return !!(cfg?.anthropicKey && cfg?.tavilyKey);
+  if (!cfg?.apiKey || !cfg?.tavilyKey) return false;
+  if (cfg.provider === "azure" && !cfg.endpoint) return false;
+  if (cfg.provider === "litellm" && !cfg.endpoint) return false;
+  return true;
 }
