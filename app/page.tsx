@@ -11,7 +11,8 @@ interface Message {
   timestamp: string;
 }
 
-const SESSION_ID = `${Date.now()}`;
+// Generated client-side to avoid hydration mismatch
+const generateSessionId = () => `${Date.now()}`;
 
 const modeConfig: Record<Mode, { label: string; color: string; desc: string }> = {
   idle: { label: "IDLE", color: "bg-gray-600", desc: "Press mic to begin" },
@@ -26,26 +27,35 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>("idle");
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [language, setLanguage] = useState<"en" | "zh">("en");
   const [interimText, setInterimText] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [sessionId] = useState(generateSessionId);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTranscriptRef = useRef("");
+  const interimTextRef = useRef("");
   const isListeningRef = useRef(false);
+  const messagesRef = useRef<Message[]>([]);
+  const isSendingRef = useRef(false); // Guard against double API calls
 
   useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     fetch("/api/setup")
       .then((r) => r.json())
-      .then((d) => setConfigured(d.configured));
+      .then((d) => setConfigured(d.configured))
+      .catch(() => setConfigured(false));
   }, []);
 
   const scrollToBottom = () => {
@@ -82,9 +92,24 @@ export default function Home() {
     return "socrates";
   };
 
+  // Extract only the question from model output, stripping any reasoning/preamble
+  const extractQuestion = (text: string): string => {
+    // Strip <think> blocks first
+    let clean = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    if (clean.split(/\s+/).length <= 5) return clean;
+    const questions = clean.match(/[^.!?\n]*\?/g);
+    if (questions && questions.length > 0) {
+      return questions[questions.length - 1].trim();
+    }
+    const sentences = clean.split(/[.!]\s+/);
+    return sentences[sentences.length - 1].trim();
+  };
+
   const sendToAPI = useCallback(
     async (transcript: string, isStuck = false, currentMessages: Message[] = []) => {
       if (!transcript.trim() && !isStuck) return;
+      if (isSendingRef.current) return; // Guard against double calls
+      isSendingRef.current = true;
 
       const userMsg: Message = {
         role: "user",
@@ -109,8 +134,9 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             messages: historyForAPI,
-            sessionId: SESSION_ID,
+            sessionId: sessionId,
             isStuck,
+            language,
           }),
         });
 
@@ -133,30 +159,33 @@ export default function Home() {
                 const parsed = JSON.parse(data);
                 if (parsed.text) {
                   fullText += parsed.text;
-                  setStreamingText(fullText);
+                  const visible = fullText.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/g, "").trim();
+                  setStreamingText(visible);
                 }
               } catch {}
             }
           }
         }
 
+        const displayText = extractQuestion(fullText);
         const assistantMsg: Message = {
           role: "assistant",
-          content: fullText,
+          content: displayText,
           timestamp: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMsg]);
         setStreamingText("");
-        setMode(detectMode(fullText));
-        speak(fullText);
+        setMode(detectMode(displayText));
+        speak(displayText);
       } catch (err) {
         console.error(err);
         setMode("idle");
       } finally {
         setIsThinking(false);
+        isSendingRef.current = false;
       }
     },
-    [speak]
+    [speak, sessionId, language]
   );
 
   const startListening = useCallback(
@@ -169,10 +198,22 @@ export default function Home() {
         return;
       }
 
+      // Clean up any existing recognition first
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        try { recognitionRef.current.stop(); } catch {}
+        recognitionRef.current = null;
+      }
+
+      // Clear transcript refs for fresh start
+      pendingTranscriptRef.current = "";
+      interimTextRef.current = "";
+
       const recognition = new SR();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = "";
+      recognition.lang = language === "zh" ? "zh-CN" : "en-US";
 
       recognition.onstart = () => {
         setIsListening(true);
@@ -194,21 +235,10 @@ export default function Home() {
         }
 
         setInterimText(interim);
+        interimTextRef.current = interim;
 
         if (final) {
           pendingTranscriptRef.current += " " + final;
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = setTimeout(() => {
-            const transcript = pendingTranscriptRef.current.trim();
-            pendingTranscriptRef.current = "";
-            setInterimText("");
-            if (transcript) {
-              setMessages((prev) => {
-                sendToAPI(transcript, false, prev);
-                return prev;
-              });
-            }
-          }, 2500);
         }
       };
 
@@ -232,24 +262,26 @@ export default function Home() {
       recognitionRef.current = recognition;
       recognition.start();
     },
-    [sendToAPI]
+    [sendToAPI, language]
   );
 
   const stopListening = useCallback(() => {
     isListeningRef.current = false;
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.onerror = null;
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
     setIsListening(false);
     setMode("idle");
     setInterimText("");
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    const pending = pendingTranscriptRef.current.trim();
+    // Include any interim text that hasn't been finalized yet
+    const pending = (pendingTranscriptRef.current + " " + interimTextRef.current).trim();
+    pendingTranscriptRef.current = "";
+    interimTextRef.current = "";
     if (pending) {
-      pendingTranscriptRef.current = "";
-      setMessages((prev) => {
-        sendToAPI(pending, false, prev);
-        return prev;
-      });
+      sendToAPI(pending, false, messagesRef.current);
     }
   }, [sendToAPI]);
 
@@ -257,22 +289,17 @@ export default function Home() {
     if (isListening) {
       stopListening();
     } else {
-      setMessages((prev) => {
-        startListening(prev);
-        return prev;
-      });
+      startListening(messagesRef.current);
     }
   };
 
   const handleStuck = () => {
-    setMessages((prev) => {
-      const context = prev
-        .slice(-6)
-        .map((m) => `${m.role}: ${m.content}`)
-        .join("\n");
-      sendToAPI(context, true, prev);
-      return prev;
-    });
+    const msgs = messagesRef.current;
+    const context = msgs
+      .slice(-6)
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n");
+    sendToAPI(context, true, msgs);
   };
 
   const currentMode = modeConfig[mode];
@@ -292,6 +319,14 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-4">
+          {/* Language Toggle */}
+          <button
+            onClick={() => setLanguage((l) => (l === "en" ? "zh" : "en"))}
+            className="text-sm px-3 py-1.5 rounded-full border border-blue-600 text-blue-400 transition-colors"
+          >
+            {language === "en" ? "EN" : "中文"}
+          </button>
+
           {/* TTS Toggle */}
           <button
             onClick={() => {
@@ -416,7 +451,7 @@ export default function Home() {
           {/* Session info */}
           <div className="text-right text-xs text-gray-600">
             <p>{messages.filter((m) => m.role === "user").length} exchanges</p>
-            <p className="font-mono">#{SESSION_ID.slice(-6)}</p>
+            <p className="font-mono">#{sessionId.slice(-6)}</p>
           </div>
         </div>
 

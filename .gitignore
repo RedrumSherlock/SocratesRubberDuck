@@ -41,3 +41,5 @@ yarn-error.log*
 next-env.d.ts
 
 # all runtime data lives in ~/.socratesrubberduck/ outside the repo
+
+certificates

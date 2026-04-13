@@ -5,21 +5,29 @@ import { writeFile, appendFile, mkdir } from "fs/promises";
 import path from "path";
 import { getConfig, DEFAULT_MODELS, PROVIDER_BASE_URLS, DATA_DIR, type AppConfig } from "@/lib/config";
 
-const SYSTEM_PROMPT = `You are the Socrates Rubber Duck — a bilingual (English/Mandarin) cognitive mirror for deep thinking sessions.
+const getSystemPrompt = (lang: "en" | "zh") => {
+  const isZh = lang === "zh";
+  return `You are the Socrates Rubber Duck — a cognitive mirror for deep thinking sessions.
+
+LANGUAGE RULE: You MUST respond ONLY in ${isZh ? "Mandarin Chinese (简体中文)" : "English"}. Never mix languages.
 
 BEHAVIORAL RULES:
 1. NEVER BE AN ASSISTANT: Do not offer to draft, code, or execute tasks. Your ONLY goal is to facilitate the user's own thinking.
-2. DUCK MODE: When the user is speaking fluently and coherently, respond with ONLY a minimal backchannel (1–3 words max): "Go on", "继续", "Mmm", "I see", "说下去". Nothing more.
-3. SOCRATIC MODE: When you detect a logical contradiction, unexamined assumption, or shallow reasoning, interrupt with ONE precise question that forces the user to defend their position. Never give the answer yourself.
-4. NO FORECASTING: Never state what the economy or any system will do. Instead ask: "What specific indicator makes you believe that trend is sustainable?"
-5. LANGUAGE MATCHING: Always respond in the same language the user is using. Native fluency — no translation feel.
-6. STUCK SIGNAL: When you receive a message containing [STUCK], you MUST:
-   a. Use the web_search tool to find 2 current, relevant facts about the topic being discussed.
-   b. Summarize the current logic chain into exactly 3 bullet points.
-   c. Present the 2 web facts.
-   d. Ask: "Based on these current data points, does your thesis still hold?" (or Mandarin equivalent if conversation is in Chinese)
+2. DUCK MODE: When the user is speaking fluently and coherently, respond with ONLY a minimal backchannel (1–3 words max): ${isZh ? '"继续", "嗯", "说下去", "然后呢"' : '"Go on", "Mmm", "I see", "And?"'}. Nothing more.
+3. SOCRATIC MODE: When you detect a logical contradiction, unexamined assumption, or shallow reasoning, ask ONE short, precise question that forces the user to defend their position. Never give the answer yourself.
+4. NO FORECASTING: Never state what the economy or any system will do. Instead ask a short probing question about their evidence.
+5. STUCK SIGNAL: When you receive a message containing [STUCK], you MUST:
+   a. Summarize the current logic chain into exactly 3 bullet points.
+   b. Ask: ${isZh ? '"基于这些，你的论点还成立吗？"' : '"Based on this, does your thesis still hold?"'}
 
-IMPORTANT: Your role is a mirror, not a guide. Reflect thinking back. Challenge it. Never complete it.`;
+CRITICAL OUTPUT RULES:
+- NEVER show your thinking, reasoning, or analysis. Output ONLY the question or backchannel — nothing else.
+- Keep every response to ONE sentence max. Be sharp and direct.
+- No preambles, no explanations — just the question.
+- RESPOND ONLY IN ${isZh ? "CHINESE" : "ENGLISH"}.
+
+Your role is a mirror, not a guide. Reflect thinking back. Challenge it. Never complete it.`;
+};
 
 interface Message {
   role: "user" | "assistant";
@@ -30,6 +38,7 @@ interface RequestBody {
   messages: Message[];
   sessionId: string;
   isStuck?: boolean;
+  language?: "en" | "zh";
 }
 
 const tavilySearch = async (query: string): Promise<string> => {
@@ -111,6 +120,7 @@ async function streamAnthropicResponse(
   cfg: AppConfig,
   messages: Message[],
   lastContent: string,
+  language: "en" | "zh",
   onComplete: (text: string) => void
 ): Promise<ReadableStream> {
   const client = new Anthropic({ apiKey: cfg.apiKey });
@@ -138,7 +148,7 @@ async function streamAnthropicResponse(
     system: [
       {
         type: "text",
-        text: SYSTEM_PROMPT,
+        text: getSystemPrompt(language),
         cache_control: { type: "ephemeral" },
       } as Anthropic.TextBlockParam & { cache_control: { type: "ephemeral" } },
     ],
@@ -158,13 +168,14 @@ async function streamOpenAICompatResponse(
   cfg: AppConfig,
   messages: Message[],
   lastContent: string,
+  language: "en" | "zh",
   onComplete: (text: string) => void
 ): Promise<ReadableStream> {
   const client = buildOpenAIClient(cfg);
   const model = cfg.model?.trim() || DEFAULT_MODELS[cfg.provider];
 
   const openAIMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: getSystemPrompt(language) },
     ...messages.slice(0, -1).map((m) => ({
       role: m.role as "user" | "assistant",
       content: m.content,
@@ -195,7 +206,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body: RequestBody = await req.json();
-    const { messages, sessionId, isStuck } = body;
+    const { messages, sessionId, isStuck, language = "en" } = body;
 
     await initSession(sessionId);
 
@@ -220,8 +231,8 @@ export async function POST(req: NextRequest) {
 
     const stream =
       cfg.provider === "anthropic"
-        ? await streamAnthropicResponse(cfg, messages, lastContent, onComplete)
-        : await streamOpenAICompatResponse(cfg, messages, lastContent, onComplete);
+        ? await streamAnthropicResponse(cfg, messages, lastContent, language, onComplete)
+        : await streamOpenAICompatResponse(cfg, messages, lastContent, language, onComplete);
 
     return new NextResponse(stream, {
       headers: {
