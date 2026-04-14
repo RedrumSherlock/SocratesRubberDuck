@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import SetupScreen from "./components/SetupScreen";
+import SessionSidebar from "./components/SessionSidebar";
 
 type Mode = "duck" | "socrates" | "searching" | "idle";
 
@@ -9,6 +10,13 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
+}
+
+interface SessionListItem {
+  id: string;
+  startedAt: string;
+  preview: string;
+  messageCount: number;
 }
 
 // Generated client-side to avoid hydration mismatch
@@ -32,7 +40,9 @@ export default function Home() {
   const [interimText, setInterimText] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [streamingText, setStreamingText] = useState("");
-  const [sessionId] = useState(generateSessionId);
+  const [sessionId, setSessionId] = useState(generateSessionId);
+  const [sessions, setSessions] = useState<SessionListItem[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -54,9 +64,102 @@ export default function Home() {
   useEffect(() => {
     fetch("/api/setup")
       .then((r) => r.json())
-      .then((d) => setConfigured(d.configured))
+      .then((d) => {
+        setConfigured(d.configured);
+        if (d.configured) {
+          _fetchSessionsAndLoadLatest();
+        }
+      })
       .catch(() => setConfigured(false));
   }, []);
+
+  const _fetchSessions = async () => {
+    try {
+      const res = await fetch("/api/sessions");
+      const data = await res.json();
+      setSessions(data.sessions || []);
+      return data.sessions || [];
+    } catch {
+      return [];
+    }
+  };
+
+  const _fetchSessionsAndLoadLatest = async () => {
+    const sessionList = await _fetchSessions();
+    if (sessionList.length > 0) {
+      _loadSession(sessionList[0].id);
+    }
+  };
+
+  const _loadSession = async (id: string) => {
+    try {
+      const res = await fetch(`/api/sessions/${id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setSessionId(id);
+      setMessages(
+        data.messages.map((m: { role: string; content: string; timestamp: string }) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          timestamp: m.timestamp,
+        }))
+      );
+    } catch {
+      // ignore load errors
+    }
+  };
+
+  const handleNewSession = () => {
+    // Stop any ongoing listening/TTS
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.onerror = null;
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
+    }
+    if (typeof window !== "undefined") {
+      window.speechSynthesis.cancel();
+    }
+    setIsListening(false);
+    setIsSpeaking(false);
+    setMode("idle");
+    setInterimText("");
+    setStreamingText("");
+    setIsThinking(false);
+    pendingTranscriptRef.current = "";
+    interimTextRef.current = "";
+    isSendingRef.current = false;
+    isListeningRef.current = false;
+
+    setSessionId(generateSessionId());
+    setMessages([]);
+  };
+
+  const handleSelectSession = (id: string) => {
+    // Stop any ongoing listening/TTS
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.onerror = null;
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
+    }
+    if (typeof window !== "undefined") {
+      window.speechSynthesis.cancel();
+    }
+    setIsListening(false);
+    setIsSpeaking(false);
+    setMode("idle");
+    setInterimText("");
+    setStreamingText("");
+    setIsThinking(false);
+    pendingTranscriptRef.current = "";
+    interimTextRef.current = "";
+    isSendingRef.current = false;
+    isListeningRef.current = false;
+
+    _loadSession(id);
+    setSidebarOpen(false);
+  };
 
   const scrollToBottom = () => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -64,6 +167,10 @@ export default function Home() {
 
   useEffect(() => {
     scrollToBottom();
+    // Refresh sessions list when messages change (updates preview)
+    if (messages.length > 0) {
+      _fetchSessions();
+    }
   }, [messages, streamingText]);
 
   const speak = useCallback(
@@ -308,54 +415,78 @@ export default function Home() {
   if (!configured) return <SetupScreen onComplete={() => setConfigured(true)} />;
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
-      {/* Header */}
-      <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            Socrates Rubber Duck
-          </h1>
-          <p className="text-xs text-gray-500 mt-0.5">Cognitive Mirror · 思维镜</p>
-        </div>
+    <div className="h-screen w-full bg-gray-950 text-gray-100 flex overflow-hidden">
+      {/* Sidebar */}
+      <SessionSidebar
+        sessions={sessions}
+        activeSessionId={sessionId}
+        onSelectSession={handleSelectSession}
+        onNewSession={handleNewSession}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
 
-        <div className="flex items-center gap-4">
-          {/* Language Toggle */}
-          <button
-            onClick={() => setLanguage((l) => (l === "en" ? "zh" : "en"))}
-            className="text-sm px-3 py-1.5 rounded-full border border-blue-600 text-blue-400 transition-colors"
-          >
-            {language === "en" ? "EN" : "中文"}
-          </button>
-
-          {/* TTS Toggle */}
-          <button
-            onClick={() => {
-              setVoiceEnabled((v) => !v);
-              if (isSpeaking) window.speechSynthesis.cancel();
-            }}
-            className={`text-sm px-3 py-1.5 rounded-full border transition-colors ${
-              voiceEnabled
-                ? "border-emerald-600 text-emerald-400"
-                : "border-gray-700 text-gray-500"
-            }`}
-          >
-            {voiceEnabled ? "AI Voice ON" : "AI Voice OFF"}
-          </button>
-
-          {/* Mode indicator */}
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${currentMode.color} ${
-                mode !== "idle" ? "animate-pulse" : ""
-              }`}
-            />
-            <span className="text-sm font-mono text-gray-300">{currentMode.label}</span>
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        {/* Header */}
+        <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {/* Hamburger menu (mobile) */}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="md:hidden text-gray-400 hover:text-gray-200 p-1"
+              aria-label="Open sidebar"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight">
+                Socrates Rubber Duck
+              </h1>
+              <p className="text-xs text-gray-500 mt-0.5">Cognitive Mirror · 思维镜</p>
+            </div>
           </div>
-        </div>
-      </header>
+
+          <div className="flex items-center gap-4">
+            {/* Language Toggle */}
+            <button
+              onClick={() => setLanguage((l) => (l === "en" ? "zh" : "en"))}
+              className="text-sm px-3 py-1.5 rounded-full border border-blue-600 text-blue-400 transition-colors"
+            >
+              {language === "en" ? "EN" : "中文"}
+            </button>
+
+            {/* TTS Toggle */}
+            <button
+              onClick={() => {
+                setVoiceEnabled((v) => !v);
+                if (isSpeaking) window.speechSynthesis.cancel();
+              }}
+              className={`text-sm px-3 py-1.5 rounded-full border transition-colors ${
+                voiceEnabled
+                  ? "border-emerald-600 text-emerald-400"
+                  : "border-gray-700 text-gray-500"
+              }`}
+            >
+              {voiceEnabled ? "AI Voice ON" : "AI Voice OFF"}
+            </button>
+
+            {/* Mode indicator */}
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${currentMode.color} ${
+                  mode !== "idle" ? "animate-pulse" : ""
+                }`}
+              />
+              <span className="text-sm font-mono text-gray-300">{currentMode.label}</span>
+            </div>
+          </div>
+        </header>
 
       {/* Transcript */}
-      <main className="flex-1 overflow-y-auto px-6 py-6 space-y-4 max-w-3xl mx-auto w-full">
+      <main className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-4 max-w-3xl mx-auto w-full">
         {messages.length === 0 && (
           <div className="text-center text-gray-600 mt-20">
             <p className="text-4xl mb-4">🦆</p>
@@ -424,7 +555,7 @@ export default function Home() {
       </main>
 
       {/* Controls */}
-      <footer className="border-t border-gray-800 px-6 py-6">
+      <footer className="flex-shrink-0 border-t border-gray-800 px-6 py-6">
         <div className="max-w-3xl mx-auto flex items-center justify-between gap-4">
           {/* I'M STUCK button */}
           <button
@@ -464,6 +595,7 @@ export default function Home() {
           </p>
         </div>
       </footer>
+      </div>
     </div>
   );
 }
