@@ -69,7 +69,7 @@ export default function SessionSidebar({
       </div>
 
       {/* Session List */}
-      <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 pb-3 space-y-1" style={{ WebkitOverflowScrolling: "touch" }}>
         {sessions.length === 0 && (
           <p className="text-sm text-gray-500 p-3 text-center">No sessions yet</p>
         )}

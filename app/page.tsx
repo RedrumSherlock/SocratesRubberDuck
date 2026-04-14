@@ -415,7 +415,7 @@ export default function Home() {
   if (!configured) return <SetupScreen onComplete={() => setConfigured(true)} />;
 
   return (
-    <div className="h-screen w-full bg-gray-950 text-gray-100 flex overflow-hidden">
+    <div className="h-dvh w-full bg-gray-950 text-gray-100 flex overflow-hidden">
       {/* Sidebar */}
       <SessionSidebar
         sessions={sessions}
@@ -486,7 +486,7 @@ export default function Home() {
         </header>
 
       {/* Transcript */}
-      <main className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-4 max-w-3xl mx-auto w-full">
+      <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-6 space-y-4 max-w-3xl mx-auto w-full" style={{ WebkitOverflowScrolling: "touch" }}>
         {messages.length === 0 && (
           <div className="text-center text-gray-600 mt-20">
             <p className="text-4xl mb-4">🦆</p>
