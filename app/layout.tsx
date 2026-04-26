@@ -15,6 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Socrates Rubber Duck · 思维镜",
   description: "A bilingual cognitive mirror for deep thinking sessions",
+  viewport: "width=device-width, initial-scale=1, maximum-scale=1",
 };
 
 export default function RootLayout({

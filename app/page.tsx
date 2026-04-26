@@ -588,7 +588,7 @@ export default function Home() {
               placeholder={isTranscribing ? "Transcribing..." : "Type or hold to speak..."}
               disabled={isTranscribing}
               rows={1}
-              className="flex-1 bg-transparent text-sm text-gray-100 placeholder-gray-500 focus:outline-none resize-none max-h-[100px] leading-6"
+              className="flex-1 bg-transparent text-base text-gray-100 placeholder-gray-500 focus:outline-none resize-none max-h-[100px] leading-6"
               style={{ height: "24px" }}
               onInput={(e) => {
                 const target = e.target as HTMLTextAreaElement;
