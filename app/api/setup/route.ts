@@ -11,7 +11,36 @@ import {
   type AppConfig,
 } from "@/lib/config";
 
-export async function GET() {
+function _maskKey(key: string | undefined): string {
+  if (!key) return "";
+  if (key.length <= 8) return "****";
+  return key.slice(0, 4) + "..." + key.slice(-4);
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+
+  if (searchParams.get("action") === "load-config") {
+    const cfg = await getConfig();
+    if (!cfg) return NextResponse.json({ config: null });
+    return NextResponse.json({
+      config: {
+        provider: cfg.provider,
+        apiKey: _maskKey(cfg.apiKey),
+        endpoint: cfg.endpoint || "",
+        model: cfg.model || "",
+        tavilyKey: _maskKey(cfg.tavilyKey),
+        openaiKeyForWhisper: _maskKey(cfg.openaiKeyForWhisper),
+        // Send raw keys so settings can pre-fill (local-only app)
+        _raw: {
+          apiKey: cfg.apiKey,
+          tavilyKey: cfg.tavilyKey,
+          openaiKeyForWhisper: cfg.openaiKeyForWhisper || "",
+        },
+      },
+    });
+  }
+
   const configured = await isConfigured();
   return NextResponse.json({ configured });
 }
@@ -85,7 +114,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "save") {
-    const { provider, apiKey, endpoint, model, tavilyKey } = body as AppConfig & { action: string };
+    const { provider, apiKey, endpoint, model, tavilyKey, openaiKeyForWhisper } = body as AppConfig & { action: string };
     if (!apiKey || !tavilyKey) {
       return NextResponse.json({ ok: false, error: "API key and Tavily key required" }, { status: 400 });
     }
@@ -95,7 +124,7 @@ export async function POST(req: NextRequest) {
     if (provider === "litellm" && !endpoint) {
       return NextResponse.json({ ok: false, error: "Endpoint required for LiteLLM" }, { status: 400 });
     }
-    await saveConfig({ provider, apiKey, endpoint, model, tavilyKey });
+    await saveConfig({ provider, apiKey, endpoint, model, tavilyKey, openaiKeyForWhisper });
     return NextResponse.json({ ok: true });
   }
 

@@ -35,6 +35,7 @@ export default function SetupScreen({ onComplete }: Props) {
   const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
   const [tavilyKey, setTavilyKey] = useState("");
+  const [openaiKeyForWhisper, setOpenaiKeyForWhisper] = useState("");
 
   const [llmState, setLlmState] = useState<TestState>("idle");
   const [tavilyState, setTavilyState] = useState<TestState>("idle");
@@ -51,7 +52,10 @@ export default function SetupScreen({ onComplete }: Props) {
     setLlmError("");
     setModel("");
     setEndpoint("");
+    if (p === "openai") setOpenaiKeyForWhisper("");
   };
+
+  const needsWhisperKey = provider !== "openai";
 
   const testLLM = async () => {
     if (!apiKey.trim()) return;
@@ -112,6 +116,7 @@ export default function SetupScreen({ onComplete }: Props) {
         endpoint: endpoint || undefined,
         model: model || undefined,
         tavilyKey,
+        openaiKeyForWhisper: openaiKeyForWhisper || undefined,
       }),
     });
     const data = await res.json();
@@ -258,6 +263,33 @@ export default function SetupScreen({ onComplete }: Props) {
             <div className="mt-1.5 text-xs h-4">{stateIcon(tavilyState)}</div>
             {tavilyError && <p className="text-xs text-red-400 mt-1">{tavilyError}</p>}
           </div>
+
+          {/* Whisper Key (optional, only for non-OpenAI providers) */}
+          {needsWhisperKey && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1.5">
+                OpenAI Key for Voice (optional)
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-2 text-xs text-gray-600 hover:text-gray-400 underline"
+                >
+                  platform.openai.com ↗
+                </a>
+              </label>
+              <input
+                type="password"
+                value={openaiKeyForWhisper}
+                onChange={(e) => setOpenaiKeyForWhisper(e.target.value)}
+                placeholder="sk-... (for better multilingual speech recognition)"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-500"
+              />
+              <p className="text-xs text-gray-600 mt-1">
+                Enables Whisper for mixed Chinese/English speech. Without this, browser STT is used.
+              </p>
+            </div>
+          )}
 
           <button
             onClick={handleSave}

@@ -15,17 +15,10 @@ export interface AppConfig {
   endpoint?: string; // required for azure and litellm
   model?: string;    // optional model override
   tavilyKey: string;
+  openaiKeyForWhisper?: string; // OpenAI key for Whisper STT (optional, uses apiKey if provider is openai)
 }
 
 export async function getConfig(): Promise<AppConfig | null> {
-  // Backward-compat: env vars for Anthropic
-  if (process.env.ANTHROPIC_API_KEY && process.env.TAVILY_API_KEY) {
-    return {
-      provider: "anthropic",
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      tavilyKey: process.env.TAVILY_API_KEY,
-    };
-  }
   try {
     const raw = await readFile(CONFIG_PATH, "utf8");
     const parsed = JSON.parse(raw);

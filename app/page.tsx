@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import SetupScreen from "./components/SetupScreen";
 import SessionSidebar from "./components/SessionSidebar";
+import SettingsModal from "./components/SettingsModal";
 
 type Mode = "duck" | "socrates" | "searching" | "idle";
 
@@ -36,13 +37,13 @@ export default function Home() {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const [language, setLanguage] = useState<"en" | "zh">("en");
   const [interimText, setInterimText] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [sessionId, setSessionId] = useState(generateSessionId);
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -52,6 +53,9 @@ export default function Home() {
   const isListeningRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
   const isSendingRef = useRef(false); // Guard against double API calls
+  const [whisperAvailable, setWhisperAvailable] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     isListeningRef.current = isListening;
@@ -68,6 +72,7 @@ export default function Home() {
         setConfigured(d.configured);
         if (d.configured) {
           _fetchSessionsAndLoadLatest();
+          _checkWhisperAvailability();
         }
       })
       .catch(() => setConfigured(false));
@@ -82,6 +87,13 @@ export default function Home() {
     } catch {
       return [];
     }
+  };
+
+  const _checkWhisperAvailability = () => {
+    fetch("/api/transcribe")
+      .then((r) => r.json())
+      .then((data) => setWhisperAvailable(data.available))
+      .catch(() => setWhisperAvailable(false));
   };
 
   const _fetchSessionsAndLoadLatest = async () => {
@@ -117,6 +129,11 @@ export default function Home() {
       try { recognitionRef.current.stop(); } catch {}
       recognitionRef.current = null;
     }
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current = null;
+      audioChunksRef.current = [];
+    }
     if (typeof window !== "undefined") {
       window.speechSynthesis.cancel();
     }
@@ -142,6 +159,11 @@ export default function Home() {
       recognitionRef.current.onerror = null;
       try { recognitionRef.current.stop(); } catch {}
       recognitionRef.current = null;
+    }
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current = null;
+      audioChunksRef.current = [];
     }
     if (typeof window !== "undefined") {
       window.speechSynthesis.cancel();
@@ -199,6 +221,11 @@ export default function Home() {
     return "socrates";
   };
 
+  // Auto-detect language from text (Chinese if contains Chinese chars, else English)
+  const _detectLanguage = (text: string): "en" | "zh" => {
+    return /[\u4e00-\u9fff]/.test(text) ? "zh" : "en";
+  };
+
   // Extract only the question from model output, stripping any reasoning/preamble
   const extractQuestion = (text: string): string => {
     // Strip <think> blocks first
@@ -234,6 +261,9 @@ export default function Home() {
         role: m.role,
         content: m.content,
       }));
+
+      // Auto-detect language from the transcript
+      const language = _detectLanguage(transcript);
 
       try {
         const res = await fetch("/api/chat", {
@@ -292,12 +322,88 @@ export default function Home() {
         isSendingRef.current = false;
       }
     },
-    [speak, sessionId, language]
+    [speak, sessionId]
   );
+
+  const _transcribeWithWhisper = async (audioBlob: Blob): Promise<string> => {
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "audio.webm");
+    const res = await fetch("/api/transcribe", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) throw new Error("Transcription failed");
+    const data = await res.json();
+    return data.text || "";
+  };
+
+  const _startWhisperRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.start(1000); // Collect data every second
+      mediaRecorderRef.current = mediaRecorder;
+      setIsListening(true);
+      setMode("duck");
+      setInterimText("Listening (Whisper)...");
+    } catch (err) {
+      console.error("Failed to start Whisper recording:", err);
+      alert("Microphone access denied or not available.");
+    }
+  }, []);
+
+  const _stopWhisperRecording = useCallback(async () => {
+    const mediaRecorder = mediaRecorderRef.current;
+    if (!mediaRecorder) return;
+
+    return new Promise<void>((resolve) => {
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks
+        mediaRecorder.stream.getTracks().forEach((track) => track.stop());
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        audioChunksRef.current = [];
+        mediaRecorderRef.current = null;
+
+        if (audioBlob.size > 0) {
+          setInterimText("Transcribing...");
+          try {
+            const transcript = await _transcribeWithWhisper(audioBlob);
+            setInterimText("");
+            if (transcript.trim()) {
+              sendToAPI(transcript.trim(), false, messagesRef.current);
+            }
+          } catch (err) {
+            console.error("Whisper transcription error:", err);
+            setInterimText("");
+          }
+        }
+        resolve();
+      };
+
+      mediaRecorder.stop();
+    });
+  }, [sendToAPI]);
 
   const startListening = useCallback(
     (currentMessages: Message[]) => {
       if (typeof window === "undefined") return;
+
+      // Use Whisper if available (better for multilingual/code-switching)
+      if (whisperAvailable) {
+        _startWhisperRecording();
+        return;
+      }
+
+      // Fallback to browser's SpeechRecognition
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) {
@@ -320,7 +426,8 @@ export default function Home() {
       const recognition = new SR();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = language === "zh" ? "zh-CN" : "en-US";
+      // Fallback browser STT - default to English (Whisper handles multilingual better)
+      recognition.lang = "en-US";
 
       recognition.onstart = () => {
         setIsListening(true);
@@ -369,19 +476,27 @@ export default function Home() {
       recognitionRef.current = recognition;
       recognition.start();
     },
-    [sendToAPI, language]
+    [sendToAPI, whisperAvailable, _startWhisperRecording]
   );
 
-  const stopListening = useCallback(() => {
+  const stopListening = useCallback(async () => {
     isListeningRef.current = false;
+    setIsListening(false);
+    setMode("idle");
+
+    // Handle Whisper recording
+    if (mediaRecorderRef.current) {
+      await _stopWhisperRecording();
+      return;
+    }
+
+    // Handle browser SpeechRecognition
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       recognitionRef.current.onerror = null;
       recognitionRef.current.stop();
       recognitionRef.current = null;
     }
-    setIsListening(false);
-    setMode("idle");
     setInterimText("");
     // Include any interim text that hasn't been finalized yet
     const pending = (pendingTranscriptRef.current + " " + interimTextRef.current).trim();
@@ -390,7 +505,7 @@ export default function Home() {
     if (pending) {
       sendToAPI(pending, false, messagesRef.current);
     }
-  }, [sendToAPI]);
+  }, [sendToAPI, _stopWhisperRecording]);
 
   const toggleListening = () => {
     if (isListening) {
@@ -416,6 +531,13 @@ export default function Home() {
 
   return (
     <div className="h-dvh w-full bg-gray-950 text-gray-100 flex overflow-hidden">
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={_checkWhisperAvailability}
+      />
+
       {/* Sidebar */}
       <SessionSidebar
         sessions={sessions}
@@ -450,12 +572,16 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Language Toggle */}
+            {/* Settings */}
             <button
-              onClick={() => setLanguage((l) => (l === "en" ? "zh" : "en"))}
-              className="text-sm px-3 py-1.5 rounded-full border border-blue-600 text-blue-400 transition-colors"
+              onClick={() => setSettingsOpen(true)}
+              className="text-gray-500 hover:text-gray-300 transition-colors"
+              aria-label="Settings"
             >
-              {language === "en" ? "EN" : "中文"}
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
             </button>
 
             {/* TTS Toggle */}
@@ -593,6 +719,11 @@ export default function Home() {
               ? currentMode.desc
               : "Click mic to start · Click I'M STUCK for a reality check"}
           </p>
+          {whisperAvailable && (
+            <p className="text-xs text-emerald-600 mt-1">
+              Whisper mode: multilingual speech enabled
+            </p>
+          )}
         </div>
       </footer>
       </div>
