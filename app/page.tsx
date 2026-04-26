@@ -578,88 +578,78 @@ export default function Home() {
       </main>
 
       {/* Controls */}
-      <footer className="flex-shrink-0 border-t border-gray-800 px-4 py-4">
-        <div className="max-w-3xl mx-auto space-y-3">
-          {/* Text input row */}
-          <div className="flex items-end gap-3">
-            {/* I'M STUCK button */}
-            <button
-              onClick={handleStuck}
-              disabled={isThinking || messages.length === 0}
-              className="flex-shrink-0 bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs px-3 py-2 rounded-lg transition-colors uppercase tracking-wider"
-            >
-              STUCK
-            </button>
-
-            {/* Text input */}
-            <div className="flex-1 relative">
-              <textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                placeholder={isTranscribing ? "Transcribing..." : "Hold mic to speak, or type here..."}
-                disabled={isTranscribing}
-                rows={1}
-                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 pr-12 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-500 resize-none min-h-[48px] max-h-[120px]"
-                style={{ height: "auto" }}
-                onInput={(e) => {
-                  const target = e.target as HTMLTextAreaElement;
-                  target.style.height = "auto";
-                  target.style.height = Math.min(target.scrollHeight, 120) + "px";
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSendDraft();
-                  }
-                }}
-              />
-              {isTranscribing && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  <div className="w-5 h-5 border-2 border-gray-500 border-t-emerald-400 rounded-full animate-spin" />
-                </div>
-              )}
-            </div>
-
-            {/* Mic button - hold to record */}
-            <button
-              onMouseDown={handleMicDown}
-              onMouseUp={handleMicUp}
-              onMouseLeave={handleMicUp}
-              onTouchStart={handleMicDown}
-              onTouchEnd={handleMicUp}
-              disabled={isThinking || isTranscribing || !whisperAvailable}
-              className={`flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-xl shadow-lg transition-all select-none ${
-                isListening
-                  ? "bg-red-600 scale-110 ring-4 ring-red-400/30"
-                  : "bg-gray-700 hover:bg-gray-600"
-              } disabled:opacity-40 disabled:cursor-not-allowed`}
-              title={whisperAvailable ? "Hold to record" : "Configure OpenAI key in settings for voice input"}
-            >
-              {isListening ? "🔴" : "🎙"}
-            </button>
-
-            {/* Send button */}
+      <footer className="flex-shrink-0 border-t border-gray-800 px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+        <div className="max-w-3xl mx-auto space-y-2">
+          {/* Row 1: Text input + send arrow (iMessage style) */}
+          <div className="flex items-end gap-2 bg-gray-800 border border-gray-600 rounded-2xl px-3 py-1.5 focus-within:border-gray-400">
+            <textarea
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              placeholder={isTranscribing ? "Transcribing..." : "Type or hold to speak..."}
+              disabled={isTranscribing}
+              rows={1}
+              className="flex-1 bg-transparent text-sm text-gray-100 placeholder-gray-500 focus:outline-none resize-none max-h-[100px] leading-6"
+              style={{ height: "24px" }}
+              onInput={(e) => {
+                const target = e.target as HTMLTextAreaElement;
+                target.style.height = "24px";
+                target.style.height = Math.min(target.scrollHeight, 100) + "px";
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendDraft();
+                }
+              }}
+            />
             <button
               onClick={handleSendDraft}
               disabled={!draftText.trim() || isThinking || isTranscribing}
-              className="flex-shrink-0 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-sm px-4 py-3 rounded-xl transition-colors"
+              className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:opacity-50 flex items-center justify-center transition-colors"
             >
-              Send
+              {isTranscribing ? (
+                <div className="w-3.5 h-3.5 border-2 border-gray-500 border-t-emerald-400 rounded-full animate-spin" />
+              ) : (
+                <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" />
+                </svg>
+              )}
             </button>
           </div>
 
-          {/* Status bar */}
-          <div className="flex items-center justify-between text-xs text-gray-600">
-            <p>
+          {/* Row 2: STUCK (30%) + Hold to Speak (70%) */}
+          <div className="flex gap-2">
+            {/* STUCK button */}
+            <button
+              onClick={handleStuck}
+              disabled={isThinking || messages.length === 0}
+              className="w-[30%] bg-red-700 hover:bg-red-600 active:bg-red-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm py-3 rounded-xl transition-colors uppercase tracking-wider"
+            >
+              I&apos;M STUCK
+            </button>
+
+            {/* Hold to Speak button (WeChat style) */}
+            <button
+              onMouseDown={handleMicDown}
+              onMouseUp={handleMicUp}
+              onMouseLeave={() => { if (isListening) handleMicUp(); }}
+              onTouchStart={handleMicDown}
+              onTouchEnd={handleMicUp}
+              onContextMenu={(e) => e.preventDefault()}
+              disabled={isThinking || isTranscribing || !whisperAvailable}
+              className={`w-[70%] py-3 rounded-xl text-sm font-semibold transition-all select-none ${
+                isListening
+                  ? "bg-red-600 text-white scale-[0.98]"
+                  : "bg-gray-800 border border-gray-600 text-gray-300 hover:bg-gray-750 active:bg-gray-700"
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+              title={whisperAvailable ? "Hold to record" : "Configure OpenAI key in settings"}
+            >
               {isListening
-                ? "Recording... release to transcribe"
+                ? "Release to Send"
                 : isTranscribing
                 ? "Transcribing..."
-                : whisperAvailable
-                ? "Hold mic to speak · Enter to send"
-                : "Type your message · Enter to send"}
-            </p>
-            <p className="font-mono">#{sessionId.slice(-6)} · {messages.filter((m) => m.role === "user").length} exchanges</p>
+                : "Hold to Speak"}
+            </button>
           </div>
         </div>
       </footer>
