@@ -24,8 +24,8 @@ interface SessionListItem {
 const generateSessionId = () => `${Date.now()}`;
 
 const modeConfig: Record<Mode, { label: string; color: string; desc: string }> = {
-  idle: { label: "IDLE", color: "bg-gray-600", desc: "Press mic to begin" },
-  duck: { label: "DUCK", color: "bg-emerald-600", desc: "Listening..." },
+  idle: { label: "IDLE", color: "bg-gray-600", desc: "Hold mic to speak" },
+  duck: { label: "DUCK", color: "bg-emerald-600", desc: "Recording..." },
   socrates: { label: "SOCRATES", color: "bg-amber-500", desc: "Challenging..." },
   searching: { label: "SEARCHING", color: "bg-blue-600", desc: "Grounding..." },
 };
@@ -37,29 +37,23 @@ export default function Home() {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const [interimText, setInterimText] = useState("");
   const [isThinking, setIsThinking] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [sessionId, setSessionId] = useState(generateSessionId);
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recognitionRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pendingTranscriptRef = useRef("");
-  const interimTextRef = useRef("");
-  const isListeningRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
   const isSendingRef = useRef(false); // Guard against double API calls
   const [whisperAvailable, setWhisperAvailable] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-
-  useEffect(() => {
-    isListeningRef.current = isListening;
-  }, [isListening]);
+  const recordStartTimeRef = useRef<number>(0);
+  const MIN_RECORDING_MS = 500; // Minimum recording duration to avoid accidental taps
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -122,13 +116,7 @@ export default function Home() {
   };
 
   const handleNewSession = () => {
-    // Stop any ongoing listening/TTS
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.onerror = null;
-      try { recognitionRef.current.stop(); } catch {}
-      recognitionRef.current = null;
-    }
+    // Stop any ongoing recording/TTS
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
       mediaRecorderRef.current = null;
@@ -140,26 +128,18 @@ export default function Home() {
     setIsListening(false);
     setIsSpeaking(false);
     setMode("idle");
-    setInterimText("");
     setStreamingText("");
     setIsThinking(false);
-    pendingTranscriptRef.current = "";
-    interimTextRef.current = "";
+    setDraftText("");
+    setIsTranscribing(false);
     isSendingRef.current = false;
-    isListeningRef.current = false;
 
     setSessionId(generateSessionId());
     setMessages([]);
   };
 
   const handleSelectSession = (id: string) => {
-    // Stop any ongoing listening/TTS
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.onerror = null;
-      try { recognitionRef.current.stop(); } catch {}
-      recognitionRef.current = null;
-    }
+    // Stop any ongoing recording/TTS
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
       mediaRecorderRef.current = null;
@@ -171,13 +151,11 @@ export default function Home() {
     setIsListening(false);
     setIsSpeaking(false);
     setMode("idle");
-    setInterimText("");
     setStreamingText("");
     setIsThinking(false);
-    pendingTranscriptRef.current = "";
-    interimTextRef.current = "";
+    setDraftText("");
+    setIsTranscribing(false);
     isSendingRef.current = false;
-    isListeningRef.current = false;
 
     _loadSession(id);
     setSidebarOpen(false);
@@ -326,13 +304,19 @@ export default function Home() {
   );
 
   const _transcribeWithWhisper = async (audioBlob: Blob): Promise<string> => {
+    // Match file extension to actual MIME type
+    const ext = audioBlob.type.includes("mp4") ? "mp4" : audioBlob.type.includes("ogg") ? "ogg" : "webm";
     const formData = new FormData();
-    formData.append("audio", audioBlob, "audio.webm");
+    formData.append("audio", audioBlob, `audio.${ext}`);
     const res = await fetch("/api/transcribe", {
       method: "POST",
       body: formData,
     });
-    if (!res.ok) throw new Error("Transcription failed");
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      console.error("Transcription API error:", errData);
+      throw new Error(errData.error || "Transcription failed");
+    }
     const data = await res.json();
     return data.text || "";
   };
@@ -340,8 +324,21 @@ export default function Home() {
   const _startWhisperRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+
+      // Find a supported MIME type
+      const mimeTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+      let mimeType = "";
+      for (const type of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          break;
+        }
+      }
+
+      const options = mimeType ? { mimeType } : undefined;
+      const mediaRecorder = new MediaRecorder(stream, options);
       audioChunksRef.current = [];
+      recordStartTimeRef.current = Date.now();
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -349,171 +346,80 @@ export default function Home() {
         }
       };
 
-      mediaRecorder.start(1000); // Collect data every second
+      mediaRecorder.start(); // Start without timeslice for better compatibility
       mediaRecorderRef.current = mediaRecorder;
       setIsListening(true);
       setMode("duck");
-      setInterimText("Listening (Whisper)...");
     } catch (err) {
       console.error("Failed to start Whisper recording:", err);
       alert("Microphone access denied or not available.");
     }
   }, []);
 
-  const _stopWhisperRecording = useCallback(async () => {
+  // Returns transcribed text (or empty string if too short / no audio)
+  const _stopWhisperRecording = useCallback(async (): Promise<string> => {
     const mediaRecorder = mediaRecorderRef.current;
-    if (!mediaRecorder) return;
+    if (!mediaRecorder) return "";
 
-    return new Promise<void>((resolve) => {
+    const recordingDuration = Date.now() - recordStartTimeRef.current;
+    const mimeType = mediaRecorder.mimeType || "audio/webm";
+
+    return new Promise<string>((resolve) => {
       mediaRecorder.onstop = async () => {
-        // Stop all tracks
         mediaRecorder.stream.getTracks().forEach((track) => track.stop());
 
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         audioChunksRef.current = [];
         mediaRecorderRef.current = null;
 
-        if (audioBlob.size > 0) {
-          setInterimText("Transcribing...");
-          try {
-            const transcript = await _transcribeWithWhisper(audioBlob);
-            setInterimText("");
-            if (transcript.trim()) {
-              sendToAPI(transcript.trim(), false, messagesRef.current);
-            }
-          } catch (err) {
-            console.error("Whisper transcription error:", err);
-            setInterimText("");
-          }
-        }
-        resolve();
-      };
-
-      mediaRecorder.stop();
-    });
-  }, [sendToAPI]);
-
-  const startListening = useCallback(
-    (currentMessages: Message[]) => {
-      if (typeof window === "undefined") return;
-
-      // Use Whisper if available (better for multilingual/code-switching)
-      if (whisperAvailable) {
-        _startWhisperRecording();
-        return;
-      }
-
-      // Fallback to browser's SpeechRecognition
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SR) {
-        alert("Speech recognition not supported in this browser. Try Chrome or Edge.");
-        return;
-      }
-
-      // Clean up any existing recognition first
-      if (recognitionRef.current) {
-        recognitionRef.current.onend = null;
-        recognitionRef.current.onerror = null;
-        try { recognitionRef.current.stop(); } catch {}
-        recognitionRef.current = null;
-      }
-
-      // Clear transcript refs for fresh start
-      pendingTranscriptRef.current = "";
-      interimTextRef.current = "";
-
-      const recognition = new SR();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      // Fallback browser STT - default to English (Whisper handles multilingual better)
-      recognition.lang = "en-US";
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setMode("duck");
-      };
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      recognition.onresult = (event: any) => {
-        let interim = "";
-        let final = "";
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const t = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            final += t;
-          } else {
-            interim += t;
-          }
+        // Skip if recording too short or no audio data
+        if (recordingDuration < MIN_RECORDING_MS || audioBlob.size < 1000) {
+          setIsListening(false);
+          setMode("idle");
+          resolve("");
+          return;
         }
 
-        setInterimText(interim);
-        interimTextRef.current = interim;
-
-        if (final) {
-          pendingTranscriptRef.current += " " + final;
-        }
-      };
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      recognition.onerror = (e: any) => {
-        console.error("STT error:", e.error);
-        if (e.error !== "no-speech") {
+        setIsTranscribing(true);
+        try {
+          const transcript = await _transcribeWithWhisper(audioBlob);
+          resolve(transcript.trim());
+        } catch (err) {
+          console.error("Whisper transcription error:", err);
+          resolve("");
+        } finally {
+          setIsTranscribing(false);
           setIsListening(false);
           setMode("idle");
         }
       };
 
-      recognition.onend = () => {
-        if (isListeningRef.current) {
-          try {
-            recognition.start();
-          } catch {}
-        }
-      };
+      mediaRecorder.stop();
+    });
+  }, []);
 
-      recognitionRef.current = recognition;
-      recognition.start();
-    },
-    [sendToAPI, whisperAvailable, _startWhisperRecording]
-  );
-
-  const stopListening = useCallback(async () => {
-    isListeningRef.current = false;
-    setIsListening(false);
-    setMode("idle");
-
-    // Handle Whisper recording
-    if (mediaRecorderRef.current) {
-      await _stopWhisperRecording();
-      return;
+  // Hold-to-record handlers for Whisper mode
+  const handleMicDown = useCallback(() => {
+    if (isThinking || isTranscribing) return;
+    if (whisperAvailable) {
+      _startWhisperRecording();
     }
+  }, [isThinking, isTranscribing, whisperAvailable, _startWhisperRecording]);
 
-    // Handle browser SpeechRecognition
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.onerror = null;
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
+  const handleMicUp = useCallback(async () => {
+    if (!mediaRecorderRef.current) return;
+    const transcript = await _stopWhisperRecording();
+    if (transcript) {
+      setDraftText((prev) => (prev ? prev + " " + transcript : transcript));
     }
-    setInterimText("");
-    // Include any interim text that hasn't been finalized yet
-    const pending = (pendingTranscriptRef.current + " " + interimTextRef.current).trim();
-    pendingTranscriptRef.current = "";
-    interimTextRef.current = "";
-    if (pending) {
-      sendToAPI(pending, false, messagesRef.current);
-    }
-  }, [sendToAPI, _stopWhisperRecording]);
+  }, [_stopWhisperRecording]);
 
-  const toggleListening = () => {
-    if (isListening) {
-      stopListening();
-    } else {
-      startListening(messagesRef.current);
-    }
-  };
+  const handleSendDraft = useCallback(() => {
+    const text = draftText.trim();
+    if (!text || isThinking) return;
+    setDraftText("");
+    sendToAPI(text, false, messagesRef.current);
+  }, [draftText, isThinking, sendToAPI]);
 
   const handleStuck = () => {
     const msgs = messagesRef.current;
@@ -617,7 +523,7 @@ export default function Home() {
           <div className="text-center text-gray-600 mt-20">
             <p className="text-4xl mb-4">🦆</p>
             <p className="text-lg">Start talking. Think out loud.</p>
-            <p className="text-sm mt-2">Press the mic when ready.</p>
+            <p className="text-sm mt-2">Hold the mic to speak, or type below.</p>
           </div>
         )}
 
@@ -668,62 +574,93 @@ export default function Home() {
           </div>
         )}
 
-        {/* Interim STT text */}
-        {interimText && (
-          <div className="flex justify-end">
-            <div className="max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed bg-gray-800/50 border border-gray-700/50 text-gray-400 italic">
-              {interimText}
-            </div>
-          </div>
-        )}
-
         <div ref={scrollRef} />
       </main>
 
       {/* Controls */}
-      <footer className="flex-shrink-0 border-t border-gray-800 px-6 py-6">
-        <div className="max-w-3xl mx-auto flex items-center justify-between gap-4">
-          {/* I'M STUCK button */}
-          <button
-            onClick={handleStuck}
-            disabled={isThinking || messages.length === 0}
-            className="bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm px-6 py-4 rounded-xl transition-colors uppercase tracking-widest shadow-lg"
-          >
-            I&apos;M STUCK
-          </button>
+      <footer className="flex-shrink-0 border-t border-gray-800 px-4 py-4">
+        <div className="max-w-3xl mx-auto space-y-3">
+          {/* Text input row */}
+          <div className="flex items-end gap-3">
+            {/* I'M STUCK button */}
+            <button
+              onClick={handleStuck}
+              disabled={isThinking || messages.length === 0}
+              className="flex-shrink-0 bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs px-3 py-2 rounded-lg transition-colors uppercase tracking-wider"
+            >
+              STUCK
+            </button>
 
-          {/* Mic button */}
-          <button
-            onClick={toggleListening}
-            disabled={isThinking}
-            className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl shadow-xl transition-all ${
-              isListening
-                ? "bg-red-600 hover:bg-red-500 scale-105 ring-4 ring-red-400/30"
-                : "bg-gray-700 hover:bg-gray-600"
-            } disabled:opacity-40 disabled:cursor-not-allowed`}
-          >
-            {isListening ? "⏹" : "🎙"}
-          </button>
+            {/* Text input */}
+            <div className="flex-1 relative">
+              <textarea
+                value={draftText}
+                onChange={(e) => setDraftText(e.target.value)}
+                placeholder={isTranscribing ? "Transcribing..." : "Hold mic to speak, or type here..."}
+                disabled={isTranscribing}
+                rows={1}
+                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 pr-12 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-500 resize-none min-h-[48px] max-h-[120px]"
+                style={{ height: "auto" }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = "auto";
+                  target.style.height = Math.min(target.scrollHeight, 120) + "px";
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendDraft();
+                  }
+                }}
+              />
+              {isTranscribing && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <div className="w-5 h-5 border-2 border-gray-500 border-t-emerald-400 rounded-full animate-spin" />
+                </div>
+              )}
+            </div>
 
-          {/* Session info */}
-          <div className="text-right text-xs text-gray-600">
-            <p>{messages.filter((m) => m.role === "user").length} exchanges</p>
-            <p className="font-mono">#{sessionId.slice(-6)}</p>
+            {/* Mic button - hold to record */}
+            <button
+              onMouseDown={handleMicDown}
+              onMouseUp={handleMicUp}
+              onMouseLeave={handleMicUp}
+              onTouchStart={handleMicDown}
+              onTouchEnd={handleMicUp}
+              disabled={isThinking || isTranscribing || !whisperAvailable}
+              className={`flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-xl shadow-lg transition-all select-none ${
+                isListening
+                  ? "bg-red-600 scale-110 ring-4 ring-red-400/30"
+                  : "bg-gray-700 hover:bg-gray-600"
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+              title={whisperAvailable ? "Hold to record" : "Configure OpenAI key in settings for voice input"}
+            >
+              {isListening ? "🔴" : "🎙"}
+            </button>
+
+            {/* Send button */}
+            <button
+              onClick={handleSendDraft}
+              disabled={!draftText.trim() || isThinking || isTranscribing}
+              className="flex-shrink-0 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-sm px-4 py-3 rounded-xl transition-colors"
+            >
+              Send
+            </button>
           </div>
-        </div>
 
-        {/* Status bar */}
-        <div className="max-w-3xl mx-auto mt-3 text-center">
-          <p className="text-xs text-gray-600">
-            {isListening
-              ? currentMode.desc
-              : "Click mic to start · Click I'M STUCK for a reality check"}
-          </p>
-          {whisperAvailable && (
-            <p className="text-xs text-emerald-600 mt-1">
-              Whisper mode: multilingual speech enabled
+          {/* Status bar */}
+          <div className="flex items-center justify-between text-xs text-gray-600">
+            <p>
+              {isListening
+                ? "Recording... release to transcribe"
+                : isTranscribing
+                ? "Transcribing..."
+                : whisperAvailable
+                ? "Hold mic to speak · Enter to send"
+                : "Type your message · Enter to send"}
             </p>
-          )}
+            <p className="font-mono">#{sessionId.slice(-6)} · {messages.filter((m) => m.role === "user").length} exchanges</p>
+          </div>
         </div>
       </footer>
       </div>

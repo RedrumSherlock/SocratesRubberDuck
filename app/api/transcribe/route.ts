@@ -43,10 +43,12 @@ export async function POST(req: NextRequest) {
     const transcription = await client.audio.transcriptions.create({
       file: audioFile,
       model: "gpt-4o-mini-transcribe",
+      prompt: "Bilingual Chinese-English speech. Preserve English words, do not translate. Example: 我在lead一个AI Platform的团队",
     });
     return NextResponse.json({ text: transcription.text });
   } catch (err) {
     console.error("Transcription error:", err);
-    return NextResponse.json({ error: "Transcription failed" }, { status: 500 });
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
