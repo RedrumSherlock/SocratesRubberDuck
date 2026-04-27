@@ -16,6 +16,7 @@ export interface AppConfig {
   model?: string;    // optional model override
   tavilyKey: string;
   openaiKeyForWhisper?: string; // OpenAI key for Whisper STT (optional, uses apiKey if provider is openai)
+  factCheckModel?: string; // model for fact check mode (defaults to best available)
 }
 
 export async function getConfig(): Promise<AppConfig | null> {

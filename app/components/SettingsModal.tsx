@@ -38,6 +38,7 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
   const [model, setModel] = useState("");
   const [tavilyKey, setTavilyKey] = useState("");
   const [openaiKeyForWhisper, setOpenaiKeyForWhisper] = useState("");
+  const [factCheckModel, setFactCheckModel] = useState("");
 
   const [llmState, setLlmState] = useState<TestState>("idle");
   const [tavilyState, setTavilyState] = useState<TestState>("idle");
@@ -64,6 +65,7 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
           setApiKey(data.config._raw.apiKey || "");
           setTavilyKey(data.config._raw.tavilyKey || "");
           setOpenaiKeyForWhisper(data.config._raw.openaiKeyForWhisper || "");
+          setFactCheckModel(data.config.factCheckModel || "");
           // Mark as pre-validated since these are saved keys
           setLlmState("ok");
           setTavilyState("ok");
@@ -138,6 +140,7 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
         model: model || undefined,
         tavilyKey,
         openaiKeyForWhisper: openaiKeyForWhisper || undefined,
+        factCheckModel: factCheckModel || undefined,
       }),
     });
     const data = await res.json();
@@ -227,6 +230,23 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
               {!needsModel && defaultModel && (
                 <p className="text-xs text-gray-600 mt-1">Default: {defaultModel}</p>
               )}
+            </div>
+
+            {/* Fact Check Model */}
+            <div>
+              <label className="block text-sm text-gray-400 mb-1.5">
+                Fact Check Model (optional)
+              </label>
+              <input
+                type="text"
+                value={factCheckModel}
+                onChange={(e) => setFactCheckModel(e.target.value)}
+                placeholder={provider === "anthropic" ? "claude-opus-4-6" : defaultModel || "default"}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-500"
+              />
+              <p className="text-xs text-gray-600 mt-1">
+                Model used for Fact Check searches. Use a powerful model for best results.
+              </p>
             </div>
 
             {/* API Key */}

@@ -45,6 +45,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [factCheckMode, setFactCheckMode] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
@@ -218,7 +219,7 @@ export default function Home() {
   };
 
   const sendToAPI = useCallback(
-    async (transcript: string, isStuck = false, currentMessages: Message[] = []) => {
+    async (transcript: string, isStuck = false, currentMessages: Message[] = [], isFactCheck = false) => {
       if (!transcript.trim() && !isStuck) return;
       if (isSendingRef.current) return; // Guard against double calls
       isSendingRef.current = true;
@@ -232,7 +233,7 @@ export default function Home() {
       const updatedMessages = [...currentMessages, userMsg];
       setMessages(updatedMessages);
       setIsThinking(true);
-      if (isStuck) setMode("searching");
+      if (isStuck || isFactCheck) setMode("searching");
       setStreamingText("");
 
       const historyForAPI = updatedMessages.map((m) => ({
@@ -251,6 +252,7 @@ export default function Home() {
             messages: historyForAPI,
             sessionId: sessionId,
             isStuck,
+            isFactCheck,
             language,
           }),
         });
@@ -282,7 +284,10 @@ export default function Home() {
           }
         }
 
-        const displayText = extractQuestion(fullText);
+        // For fact check, keep the full response; for normal, extract just the question
+        const displayText = isFactCheck
+          ? fullText.replace(/<think>[\s\S]*?<\/think>/g, "").trim()
+          : extractQuestion(fullText);
         const assistantMsg: Message = {
           role: "assistant",
           content: displayText,
@@ -290,8 +295,8 @@ export default function Home() {
         };
         setMessages((prev) => [...prev, assistantMsg]);
         setStreamingText("");
-        setMode(detectMode(displayText));
-        speak(displayText);
+        setMode(isFactCheck ? "searching" : detectMode(displayText));
+        if (!isFactCheck) speak(displayText);
       } catch (err) {
         console.error(err);
         setMode("idle");
@@ -417,9 +422,11 @@ export default function Home() {
   const handleSendDraft = useCallback(() => {
     const text = draftText.trim();
     if (!text || isThinking) return;
+    const useFactCheck = factCheckMode;
     setDraftText("");
-    sendToAPI(text, false, messagesRef.current);
-  }, [draftText, isThinking, sendToAPI]);
+    setFactCheckMode(false);
+    sendToAPI(text, false, messagesRef.current, useFactCheck);
+  }, [draftText, isThinking, sendToAPI, factCheckMode]);
 
   const handleStuck = () => {
     const msgs = messagesRef.current;
@@ -617,15 +624,28 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Row 2: STUCK (30%) + Hold to Speak (70%) */}
+          {/* Row 2: STUCK + FACT CHECK + Hold to Speak */}
           <div className="flex gap-2">
             {/* STUCK button */}
             <button
               onClick={handleStuck}
               disabled={isThinking || messages.length === 0}
-              className="w-[30%] bg-red-700 hover:bg-red-600 active:bg-red-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm py-3 rounded-xl transition-colors uppercase tracking-wider"
+              className="w-[20%] bg-red-700 hover:bg-red-600 active:bg-red-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs py-3 rounded-xl transition-colors uppercase tracking-wide"
             >
-              I&apos;M STUCK
+              STUCK
+            </button>
+
+            {/* FACT CHECK toggle button */}
+            <button
+              onClick={() => setFactCheckMode((prev) => !prev)}
+              disabled={isThinking}
+              className={`w-[28%] py-3 rounded-xl text-xs font-bold transition-colors uppercase tracking-wide ${
+                factCheckMode
+                  ? "bg-emerald-600 hover:bg-emerald-500 text-white ring-2 ring-emerald-400"
+                  : "bg-emerald-800 hover:bg-emerald-700 text-emerald-100"
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              {factCheckMode ? "FACT CHECK ✓" : "FACT CHECK"}
             </button>
 
             {/* Hold to Speak button (WeChat style) */}
@@ -637,7 +657,7 @@ export default function Home() {
               onTouchEnd={handleMicUp}
               onContextMenu={(e) => e.preventDefault()}
               disabled={isThinking || isTranscribing || !whisperAvailable}
-              className={`w-[70%] py-3 rounded-xl text-sm font-semibold transition-all select-none ${
+              className={`w-[52%] py-3 rounded-xl text-sm font-semibold transition-all select-none ${
                 isListening
                   ? "bg-red-600 text-white scale-[0.98]"
                   : "bg-gray-800 border border-gray-600 text-gray-300 hover:bg-gray-750 active:bg-gray-700"

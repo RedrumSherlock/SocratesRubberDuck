@@ -29,6 +29,32 @@ CRITICAL OUTPUT RULES:
 Your role is a mirror, not a guide. Reflect thinking back. Challenge it. Never complete it.`;
 };
 
+const getFactCheckPrompt = (lang: "en" | "zh") => {
+  const isZh = lang === "zh";
+  return `You are a neutral fact-finder for a Socratic thinking session.
+
+LANGUAGE RULE: You MUST respond ONLY in ${isZh ? "Mandarin Chinese (简体中文)" : "English"}. Never mix languages.
+
+YOUR ROLE:
+The user is exploring their own thinking. They have asked for factual information to inform their reasoning. Your job is to provide NEUTRAL FACTS only — no opinions, no recommendations, no guiding them toward any conclusion.
+
+RESPONSE FORMAT:
+1. Provide a concise summary of the factual information from the search results (3-5 bullet points max)
+2. Be objective and balanced — present multiple perspectives if they exist
+3. End with a SHORT Socratic question that helps the user connect these facts to their own situation, WITHOUT suggesting any particular answer
+
+CRITICAL RULES:
+- DO NOT give advice or recommendations
+- DO NOT suggest what the user should do
+- DO NOT express opinions or preferences
+- DO NOT guide them toward any conclusion
+- ONLY present facts neutrally, then ask a reflective question
+- Keep the total response under 200 words
+- RESPOND ONLY IN ${isZh ? "CHINESE" : "ENGLISH"}.
+
+You are a mirror that reflects facts, not a guide that leads to answers.`;
+};
+
 interface Message {
   role: "user" | "assistant";
   content: string;
@@ -38,6 +64,7 @@ interface RequestBody {
   messages: Message[];
   sessionId: string;
   isStuck?: boolean;
+  isFactCheck?: boolean;
   language?: "en" | "zh";
 }
 
@@ -121,7 +148,8 @@ async function streamAnthropicResponse(
   messages: Message[],
   lastContent: string,
   language: "en" | "zh",
-  onComplete: (text: string) => void
+  onComplete: (text: string) => void,
+  systemPrompt?: string
 ): Promise<ReadableStream> {
   const client = new Anthropic({ apiKey: cfg.apiKey });
 
@@ -148,7 +176,7 @@ async function streamAnthropicResponse(
     system: [
       {
         type: "text",
-        text: getSystemPrompt(language),
+        text: systemPrompt || getSystemPrompt(language),
         cache_control: { type: "ephemeral" },
       } as Anthropic.TextBlockParam & { cache_control: { type: "ephemeral" } },
     ],
@@ -169,13 +197,14 @@ async function streamOpenAICompatResponse(
   messages: Message[],
   lastContent: string,
   language: "en" | "zh",
-  onComplete: (text: string) => void
+  onComplete: (text: string) => void,
+  systemPrompt?: string
 ): Promise<ReadableStream> {
   const client = buildOpenAIClient(cfg);
   const model = cfg.model?.trim() || DEFAULT_MODELS[cfg.provider];
 
   const openAIMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: "system", content: getSystemPrompt(language) },
+    { role: "system", content: systemPrompt || getSystemPrompt(language) },
     ...messages.slice(0, -1).map((m) => ({
       role: m.role as "user" | "assistant",
       content: m.content,
@@ -206,7 +235,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body: RequestBody = await req.json();
-    const { messages, sessionId, isStuck, language = "en" } = body;
+    const { messages, sessionId, isStuck, isFactCheck, language = "en" } = body;
 
     await initSession(sessionId);
 
@@ -221,18 +250,37 @@ export async function POST(req: NextRequest) {
     let searchResults = "";
     if (isStuck) {
       searchResults = await tavilySearch(recentText.slice(0, 200));
+    } else if (isFactCheck) {
+      // For fact check, search using the user's question directly
+      searchResults = await tavilySearch(lastUserMsg.slice(0, 300));
     }
 
-    const lastContent = isStuck
-      ? `[STUCK]\n\nRecent discussion context: ${recentText.slice(0, 500)}\n\nWeb search results:\n${searchResults}`
-      : lastUserMsg;
+    let lastContent: string;
+    if (isStuck) {
+      lastContent = `[STUCK]\n\nRecent discussion context: ${recentText.slice(0, 500)}\n\nWeb search results:\n${searchResults}`;
+    } else if (isFactCheck) {
+      lastContent = `[FACT CHECK REQUEST]\n\nUser's question: ${lastUserMsg}\n\nWeb search results:\n${searchResults}`;
+    } else {
+      lastContent = lastUserMsg;
+    }
 
     const onComplete = (text: string) => appendToSession(sessionId, "assistant", text);
 
-    const stream =
-      cfg.provider === "anthropic"
-        ? await streamAnthropicResponse(cfg, messages, lastContent, language, onComplete)
-        : await streamOpenAICompatResponse(cfg, messages, lastContent, language, onComplete);
+    // For fact check, always use Anthropic with Opus 4.6 for best reasoning
+    const systemPrompt = isFactCheck ? getFactCheckPrompt(language) : getSystemPrompt(language);
+
+    let stream: ReadableStream;
+    if (isFactCheck && cfg.factCheckModel) {
+      // Use configured fact check model
+      const factCheckConfig: AppConfig = { ...cfg, model: cfg.factCheckModel };
+      stream = cfg.provider === "anthropic"
+        ? await streamAnthropicResponse(factCheckConfig, messages, lastContent, language, onComplete, systemPrompt)
+        : await streamOpenAICompatResponse(factCheckConfig, messages, lastContent, language, onComplete, systemPrompt);
+    } else if (cfg.provider === "anthropic") {
+      stream = await streamAnthropicResponse(cfg, messages, lastContent, language, onComplete, systemPrompt);
+    } else {
+      stream = await streamOpenAICompatResponse(cfg, messages, lastContent, language, onComplete, systemPrompt);
+    }
 
     return new NextResponse(stream, {
       headers: {

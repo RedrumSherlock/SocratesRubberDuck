@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
         apiKey: _maskKey(cfg.apiKey),
         endpoint: cfg.endpoint || "",
         model: cfg.model || "",
+        factCheckModel: cfg.factCheckModel || "",
         tavilyKey: _maskKey(cfg.tavilyKey),
         openaiKeyForWhisper: _maskKey(cfg.openaiKeyForWhisper),
         // Send raw keys so settings can pre-fill (local-only app)
@@ -114,7 +115,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "save") {
-    const { provider, apiKey, endpoint, model, tavilyKey, openaiKeyForWhisper } = body as AppConfig & { action: string };
+    const { provider, apiKey, endpoint, model, tavilyKey, openaiKeyForWhisper, factCheckModel } = body as AppConfig & { action: string };
     if (!apiKey || !tavilyKey) {
       return NextResponse.json({ ok: false, error: "API key and Tavily key required" }, { status: 400 });
     }
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest) {
     if (provider === "litellm" && !endpoint) {
       return NextResponse.json({ ok: false, error: "Endpoint required for LiteLLM" }, { status: 400 });
     }
-    await saveConfig({ provider, apiKey, endpoint, model, tavilyKey, openaiKeyForWhisper });
+    await saveConfig({ provider, apiKey, endpoint, model, tavilyKey, openaiKeyForWhisper, factCheckModel });
     return NextResponse.json({ ok: true });
   }
 
