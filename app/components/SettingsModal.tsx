@@ -72,7 +72,9 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [profile, setProfile] = useState<LearnerProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileUpdating, setProfileUpdating] = useState(false);
   const [profileResetting, setProfileResetting] = useState(false);
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   const needsEndpoint = provider === "azure" || provider === "litellm";
   const needsModel = provider === "azure" || provider === "litellm";
@@ -199,7 +201,31 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
     }
   };
 
+  const handleUpdateProfile = async () => {
+    setProfileUpdating(true);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update" }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setProfile(data.profile || null);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setProfileUpdating(false);
+    }
+  };
+
   const handleResetProfile = async () => {
+    if (!confirmingReset) {
+      setConfirmingReset(true);
+      return;
+    }
+    setConfirmingReset(false);
     setProfileResetting(true);
     try {
       const res = await fetch("/api/profile", {
@@ -409,11 +435,11 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
                   View Profile
                 </button>
                 <button
-                  onClick={handleResetProfile}
-                  disabled={profileResetting}
-                  className="flex-1 py-2 bg-gray-800 hover:bg-red-900/50 hover:text-red-300 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                  onClick={handleUpdateProfile}
+                  disabled={profileUpdating}
+                  className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
                 >
-                  {profileResetting ? "Resetting..." : "Reset Profile"}
+                  {profileUpdating ? "Updating..." : "Update Now"}
                 </button>
               </div>
             </div>
@@ -464,12 +490,28 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
 
             {profileLoading ? (
               <div className="text-center text-gray-500 py-10">Loading...</div>
-            ) : !profile ? (
+            ) : !profile || (
+              !profile.personality.thinkingStyle &&
+              profile.personality.strengths.length === 0 &&
+              profile.personality.weaknesses.length === 0 &&
+              !profile.personality.responseToChallenge &&
+              profile.learningPatterns.effectiveApproaches.length === 0 &&
+              profile.learningPatterns.needsHelpWith.length === 0 &&
+              !profile.learningPatterns.preferredQuestionStyle &&
+              (!profile.sessionHistory || profile.sessionHistory.length === 0)
+            ) ? (
               <div className="text-center text-gray-500 py-10">
                 <p className="mb-4">No profile yet.</p>
-                <p className="text-xs text-gray-600">
-                  Have some thinking sessions, then click &quot;Update Now&quot; to analyze them.
+                <p className="text-xs text-gray-600 mb-6">
+                  Have some thinking sessions, then click &quot;Update Now&quot; to build your profile.
                 </p>
+                <button
+                  onClick={handleUpdateProfile}
+                  disabled={profileUpdating}
+                  className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                >
+                  {profileUpdating ? "Analyzing sessions..." : "Update Now"}
+                </button>
               </div>
             ) : (
               <div className="space-y-4 text-sm">
@@ -590,15 +632,40 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
                   </div>
                 )}
 
-                {/* Reset button inside modal */}
-                <div className="pt-2">
+                {/* Action buttons inside modal */}
+                <div className="pt-2 space-y-2">
                   <button
-                    onClick={handleResetProfile}
-                    disabled={profileResetting}
-                    className="w-full py-2.5 bg-gray-800 hover:bg-red-900/50 hover:text-red-300 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                    onClick={handleUpdateProfile}
+                    disabled={profileUpdating}
+                    className="w-full py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
                   >
-                    {profileResetting ? "Resetting..." : "Reset Profile"}
+                    {profileUpdating ? "Analyzing sessions..." : "Update Now"}
                   </button>
+
+                  {confirmingReset ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setConfirmingReset(false)}
+                        className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleResetProfile}
+                        disabled={profileResetting}
+                        className="flex-1 py-2.5 bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
+                      >
+                        {profileResetting ? "Resetting..." : "Confirm Reset"}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleResetProfile}
+                      className="w-full py-2.5 bg-gray-800 hover:bg-red-900/50 hover:text-red-300 text-gray-500 text-sm font-medium rounded-lg transition-colors"
+                    >
+                      Reset Profile
+                    </button>
+                  )}
                 </div>
               </div>
             )}
