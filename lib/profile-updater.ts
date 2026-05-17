@@ -5,35 +5,54 @@ import { getConfig, DEFAULT_MODELS, PROVIDER_BASE_URLS, DATA_DIR, type AppConfig
 import { readProfile, writeProfile, createEmptyProfile, type LearnerProfile } from "@/lib/learner-profile";
 import { parseSessionFile } from "@/lib/session-parser";
 
-const PROFILE_UPDATE_PROMPT_EN = `You are analyzing transcripts from Socratic thinking sessions to build/update a learner profile.
+const PROFILE_UPDATE_PROMPT = `You are analyzing transcripts from Socratic thinking sessions to build/update a learner profile.
 
-Given the existing profile (may be empty) and new session transcripts, produce a COMPLETE updated LearnerProfile JSON.
+This profile will be injected into FUTURE sessions where the AI has NO access to past conversations. Therefore:
 
-Rules:
+CRITICAL RULES FOR ABSTRACTION:
+- NEVER reference specific session IDs, dates, or timestamps in personality/learningPatterns fields
+- NEVER reference specific topics, names, projects, or domain-specific details (e.g., no "Pinnacle", "sportsbook", "Geotap")
+- ALWAYS describe GENERALIZED cognitive patterns that apply across any topic
+- Describe HOW the user thinks, not WHAT they discussed
+- Each observation should be useful to an AI meeting this user for the first time on any subject
+
+BAD example: "在讨论sportsbook时，能快速接受Pinnacle是sharp book并调整推理"
+GOOD example: "Integrates new information quickly and adjusts existing framework without resistance when evidence is concrete"
+
+BAD example: "对模拟盘与真实环境差异的系统性评估"
+GOOD example: "Tends to skip validation of whether test conditions match real-world conditions"
+
+PROFILE FIELD GUIDELINES:
+- personality.thinkingStyle: Describe the reasoning approach — deductive, analogical, framework-first, example-driven, etc. Max 2 sentences.
+- personality.strengths: General cognitive strengths (3-5 items). Each should be a transferable pattern.
+- personality.weaknesses: General cognitive blind spots (3-5 items). Each should be a transferable pattern.
+- personality.responseToChallenge: How the user reacts when their ideas are questioned. 1-2 sentences.
+- learningPatterns.effectiveApproaches: What TYPES of Socratic techniques work (not what topics). E.g., "boundary-testing questions that ask 'what would break this'" rather than "asking about market efficiency".
+- learningPatterns.needsHelpWith: General reasoning gaps, not topic-specific gaps.
+- learningPatterns.preferredQuestionStyle: What question format/style triggers deeper thinking.
+- sessionHistory: This field CAN contain topic-specific details since it serves as a factual log.
+
+MERGE RULES:
 - Preserve existing observations unless clearly contradicted by new evidence
-- Add new personality/pattern observations from the new messages
-- Append to sessionHistory (keep last 20 entries max)
-- Identify recurring patterns across sessions
-- Be specific and evidence-based — cite actual behaviors, not generic labels
-- For thinkingStyle, describe HOW they reason (by analogy, from examples, deductively, etc.)
-- For strengths/weaknesses, note specific cognitive patterns observed
-- For responseToChallenge, describe what happens when their ideas are questioned
-- For effectiveApproaches, note what types of questions led them to breakthroughs
-- For needsHelpWith, note where they consistently get stuck
+- Merge similar observations — don't accumulate near-duplicates
+- Keep strengths/weaknesses to 3-5 items each (merge or replace weaker observations)
+- sessionHistory: append new entries, keep last 20 max
+
+Respond in the same language as the transcripts. Use simplified Chinese if transcripts are in Chinese.
 
 Respond with ONLY valid JSON matching this schema:
 {
   "lastUpdated": "<current ISO timestamp>",
   "personality": {
-    "thinkingStyle": "<description>",
-    "strengths": ["<strength1>", ...],
-    "weaknesses": ["<weakness1>", ...],
-    "responseToChallenge": "<description>"
+    "thinkingStyle": "<generalized description>",
+    "strengths": ["<pattern1>", ...],
+    "weaknesses": ["<pattern1>", ...],
+    "responseToChallenge": "<generalized description>"
   },
   "learningPatterns": {
-    "effectiveApproaches": ["<approach1>", ...],
-    "needsHelpWith": ["<area1>", ...],
-    "preferredQuestionStyle": "<description>"
+    "effectiveApproaches": ["<technique1>", ...],
+    "needsHelpWith": ["<gap1>", ...],
+    "preferredQuestionStyle": "<generalized description>"
   },
   "sessionHistory": [
     {
@@ -44,19 +63,6 @@ Respond with ONLY valid JSON matching this schema:
     }
   ]
 }`;
-
-const PROFILE_UPDATE_PROMPT_ZH = `你正在分析苏格拉底式思考对话的记录，以构建/更新学习者档案。
-
-给定现有档案（可能为空）和新的对话记录，生成一个完整的更新后 LearnerProfile JSON。
-
-规则：
-- 保留现有观察，除非被新证据明确推翻
-- 从新消息中添加新的性格/模式观察
-- 追加到 sessionHistory（最多保留最近20条）
-- 识别跨对话的重复模式
-- 具体且基于证据——引用实际行为，而非通用标签
-
-只返回有效的JSON，schema同英文版。`;
 
 function _buildOpenAIClient(cfg: AppConfig): OpenAI {
   const { provider, apiKey, endpoint } = cfg;
@@ -151,9 +157,6 @@ async function _runProfileUpdate(): Promise<void> {
     if (newTranscripts.length === 0) return;
 
     const transcript = newTranscripts.join("\n\n");
-    // Detect language from transcript
-    const isZh = /[\u4e00-\u9fff]/.test(transcript);
-    const systemPrompt = isZh ? PROFILE_UPDATE_PROMPT_ZH : PROFILE_UPDATE_PROMPT_EN;
 
     const userMessage = `EXISTING PROFILE:\n${JSON.stringify(profile, null, 2)}\n\nNEW TRANSCRIPTS:\n${transcript}`;
 
@@ -165,7 +168,7 @@ async function _runProfileUpdate(): Promise<void> {
       const result = await client.messages.create({
         model: cfg.model?.trim() || DEFAULT_MODELS.anthropic,
         max_tokens: 4096,
-        system: systemPrompt,
+        system: PROFILE_UPDATE_PROMPT,
         messages: [{ role: "user", content: userMessage }],
       });
       responseText = result.content
@@ -179,7 +182,7 @@ async function _runProfileUpdate(): Promise<void> {
         model,
         max_tokens: 4096,
         messages: [
-          { role: "system", content: systemPrompt },
+          { role: "system", content: PROFILE_UPDATE_PROMPT },
           { role: "user", content: userMessage },
         ],
       });
