@@ -167,6 +167,22 @@ export default function Home() {
     setSidebarOpen(false);
   };
 
+  const handleArchiveSession = async (id: string) => {
+    try {
+      const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        // If we archived the current session, start a new one
+        if (id === sessionId) {
+          handleNewSession();
+        }
+        // Refresh sessions list
+        _fetchSessions();
+      }
+    } catch {
+      // ignore errors
+    }
+  };
+
   const scrollToBottom = () => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -486,6 +502,7 @@ export default function Home() {
         activeSessionId={sessionId}
         onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
+        onArchiveSession={handleArchiveSession}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
