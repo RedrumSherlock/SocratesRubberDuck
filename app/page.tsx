@@ -5,7 +5,7 @@ import SetupScreen from "./components/SetupScreen";
 import SessionSidebar from "./components/SessionSidebar";
 import SettingsModal from "./components/SettingsModal";
 
-type Mode = "duck" | "socrates" | "searching" | "idle";
+type Mode = "S1" | "S2" | "S3" | "S4" | "S5" | "searching" | "idle";
 
 interface Message {
   role: "user" | "assistant";
@@ -25,8 +25,11 @@ const generateSessionId = () => `${Date.now()}`;
 
 const modeConfig: Record<Mode, { label: string; color: string; desc: string }> = {
   idle: { label: "IDLE", color: "bg-gray-600", desc: "Hold mic to speak" },
-  duck: { label: "DUCK", color: "bg-emerald-600", desc: "Recording..." },
-  socrates: { label: "SOCRATES", color: "bg-amber-500", desc: "Challenging..." },
+  S1: { label: "MINIMAL", color: "bg-emerald-600", desc: "Listening..." },
+  S2: { label: "DIRECTIONAL", color: "bg-teal-600", desc: "Guiding..." },
+  S3: { label: "SCAFFOLDED", color: "bg-amber-500", desc: "Scaffolding..." },
+  S4: { label: "STRUCTURED", color: "bg-orange-500", desc: "Structuring..." },
+  S5: { label: "GUIDED", color: "bg-red-600", desc: "Guiding..." },
   searching: { label: "SEARCHING", color: "bg-blue-600", desc: "Grounding..." },
 };
 
@@ -46,6 +49,8 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [factCheckMode, setFactCheckMode] = useState(false);
+  const [selectedLevel, setSelectedLevel] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const lastAutoLevelRef = useRef<1 | 2 | 3 | 4 | 5>(1);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
@@ -195,9 +200,11 @@ export default function Home() {
   );
 
   const detectMode = (text: string): Mode => {
+    const match = text.match(/^\[LEVEL:(S[1-5])\]/);
+    if (match) return match[1] as Mode;
+    // Fallback for models that don't output the tag
     const wordCount = text.trim().split(/\s+/).length;
-    if (wordCount <= 4) return "duck";
-    return "socrates";
+    return wordCount <= 4 ? "S1" : "S3";
   };
 
   // Auto-detect language from text (Chinese if contains Chinese chars, else English)
@@ -205,10 +212,17 @@ export default function Home() {
     return /[\u4e00-\u9fff]/.test(text) ? "zh" : "en";
   };
 
+  // Strip [LEVEL:Sx] and <think> tags from text
+  const _stripTags = (text: string): string => {
+    return text
+      .replace(/<think>[\s\S]*?<\/think>/g, "")
+      .replace(/^\[LEVEL:S[1-5]\]\s*/g, "")
+      .trim();
+  };
+
   // Extract only the question from model output, stripping any reasoning/preamble
   const extractQuestion = (text: string): string => {
-    // Strip <think> blocks first
-    let clean = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    const clean = _stripTags(text);
     if (clean.split(/\s+/).length <= 5) return clean;
     const questions = clean.match(/[^.!?\n]*\?/g);
     if (questions && questions.length > 0) {
@@ -244,6 +258,10 @@ export default function Home() {
       // Auto-detect language from the transcript
       const language = _detectLanguage(transcript);
 
+      // Send requestedLevel if user manually overrode it
+      const manualOverride = selectedLevel !== lastAutoLevelRef.current;
+      const requestedLevel = manualOverride ? selectedLevel : undefined;
+
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -254,6 +272,7 @@ export default function Home() {
             isStuck,
             isFactCheck,
             language,
+            requestedLevel,
           }),
         });
 
@@ -276,7 +295,12 @@ export default function Home() {
                 const parsed = JSON.parse(data);
                 if (parsed.text) {
                   fullText += parsed.text;
-                  const visible = fullText.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/g, "").trim();
+                  // Strip think blocks, incomplete think blocks, and [LEVEL:Sx] tags from streaming display
+                  const visible = fullText
+                    .replace(/<think>[\s\S]*?<\/think>/g, "")
+                    .replace(/<think>[\s\S]*$/g, "")
+                    .replace(/^\[LEVEL:S[1-5]\]\s*/g, "")
+                    .trim();
                   setStreamingText(visible);
                 }
               } catch {}
@@ -284,9 +308,22 @@ export default function Home() {
           }
         }
 
+        // Detect mode from raw fullText BEFORE stripping tags
+        const detectedMode = isFactCheck ? "searching" as Mode : detectMode(fullText);
+
+        // Auto-sync selectedLevel from AI response
+        if (!isFactCheck) {
+          const levelMatch = fullText.match(/^\[LEVEL:S([1-5])\]/);
+          if (levelMatch) {
+            const autoLevel = parseInt(levelMatch[1]) as 1 | 2 | 3 | 4 | 5;
+            lastAutoLevelRef.current = autoLevel;
+            setSelectedLevel(autoLevel);
+          }
+        }
+
         // For fact check, keep the full response; for normal, extract just the question
         const displayText = isFactCheck
-          ? fullText.replace(/<think>[\s\S]*?<\/think>/g, "").trim()
+          ? _stripTags(fullText)
           : extractQuestion(fullText);
         const assistantMsg: Message = {
           role: "assistant",
@@ -295,7 +332,7 @@ export default function Home() {
         };
         setMessages((prev) => [...prev, assistantMsg]);
         setStreamingText("");
-        setMode(isFactCheck ? "searching" : detectMode(displayText));
+        setMode(detectedMode);
         if (!isFactCheck) speak(displayText);
       } catch (err) {
         console.error(err);
@@ -305,7 +342,7 @@ export default function Home() {
         isSendingRef.current = false;
       }
     },
-    [speak, sessionId]
+    [speak, sessionId, selectedLevel]
   );
 
   const _transcribeWithWhisper = async (audioBlob: Blob): Promise<string> => {
@@ -354,7 +391,7 @@ export default function Home() {
       mediaRecorder.start(); // Start without timeslice for better compatibility
       mediaRecorderRef.current = mediaRecorder;
       setIsListening(true);
-      setMode("duck");
+      setMode("S1");
     } catch (err) {
       console.error("Failed to start Whisper recording:", err);
       alert("Microphone access denied or not available.");
@@ -423,19 +460,11 @@ export default function Home() {
     const text = draftText.trim();
     if (!text || isThinking) return;
     const useFactCheck = factCheckMode;
+    const triggerStuck = selectedLevel === 5;
     setDraftText("");
     setFactCheckMode(false);
-    sendToAPI(text, false, messagesRef.current, useFactCheck);
-  }, [draftText, isThinking, sendToAPI, factCheckMode]);
-
-  const handleStuck = () => {
-    const msgs = messagesRef.current;
-    const context = msgs
-      .slice(-6)
-      .map((m) => `${m.role}: ${m.content}`)
-      .join("\n");
-    sendToAPI(context, true, msgs);
-  };
+    sendToAPI(text, triggerStuck, messagesRef.current, useFactCheck);
+  }, [draftText, isThinking, sendToAPI, factCheckMode, selectedLevel]);
 
   const currentMode = modeConfig[mode];
 
@@ -624,16 +653,34 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Row 2: STUCK + FACT CHECK + Hold to Speak */}
+          {/* Row 2: Level Switcher + FACT CHECK + Hold to Speak */}
           <div className="flex gap-2">
-            {/* STUCK button */}
-            <button
-              onClick={handleStuck}
-              disabled={isThinking || messages.length === 0}
-              className="w-[20%] bg-red-700 hover:bg-red-600 active:bg-red-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs py-3 rounded-xl transition-colors uppercase tracking-wide"
-            >
-              STUCK
-            </button>
+            {/* Level switcher (replaces STUCK button) */}
+            <div className="w-[20%] flex gap-0.5">
+              <div className={`flex-1 flex items-center justify-center rounded-l-xl text-xs font-bold text-white ${
+                modeConfig[`S${selectedLevel}` as Mode]?.color || "bg-gray-600"
+              } transition-colors`}>
+                S{selectedLevel}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <button
+                  onClick={() => setSelectedLevel((l) => Math.min(l + 1, 5) as 1 | 2 | 3 | 4 | 5)}
+                  disabled={selectedLevel >= 5 || isThinking}
+                  className="flex-1 px-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 text-xs rounded-tr-xl transition-colors flex items-center justify-center"
+                  aria-label="Increase support level"
+                >
+                  ▲
+                </button>
+                <button
+                  onClick={() => setSelectedLevel((l) => Math.max(l - 1, 1) as 1 | 2 | 3 | 4 | 5)}
+                  disabled={selectedLevel <= 1 || isThinking}
+                  className="flex-1 px-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 text-xs rounded-br-xl transition-colors flex items-center justify-center"
+                  aria-label="Decrease support level"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
 
             {/* FACT CHECK toggle button */}
             <button

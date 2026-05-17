@@ -3,6 +3,27 @@
 import { useState, useEffect } from "react";
 import { PROVIDER_LABELS, DEFAULT_MODELS, type LLMProvider } from "@/lib/providers";
 
+interface LearnerProfile {
+  lastUpdated: string;
+  personality: {
+    thinkingStyle: string;
+    strengths: string[];
+    weaknesses: string[];
+    responseToChallenge: string;
+  };
+  learningPatterns: {
+    effectiveApproaches: string[];
+    needsHelpWith: string[];
+    preferredQuestionStyle: string;
+  };
+  sessionHistory: Array<{
+    date: string;
+    topics: string[];
+    keyInsight: string;
+    struggledWith: string;
+  }>;
+}
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
@@ -46,6 +67,12 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
   const [tavilyError, setTavilyError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Profile management
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [profile, setProfile] = useState<LearnerProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileUpdating, setProfileUpdating] = useState(false);
 
   const needsEndpoint = provider === "azure" || provider === "litellm";
   const needsModel = provider === "azure" || provider === "litellm";
@@ -156,6 +183,39 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
     if (s === "ok") return <span className="text-emerald-400">OK</span>;
     if (s === "error") return <span className="text-red-400">Failed</span>;
     return null;
+  };
+
+  const handleViewProfile = async () => {
+    setProfileLoading(true);
+    setProfileModalOpen(true);
+    try {
+      const res = await fetch("/api/profile");
+      const data = await res.json();
+      setProfile(data.profile || null);
+    } catch {
+      setProfile(null);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handleUpdateProfile = async () => {
+    setProfileUpdating(true);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update" }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setProfile(data.profile || null);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setProfileUpdating(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -335,6 +395,29 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
               </p>
             </div>
 
+            {/* Learner Profile */}
+            <div className="border-t border-gray-700 pt-4">
+              <label className="block text-sm text-gray-400 mb-2">Learner Profile</label>
+              <p className="text-xs text-gray-600 mb-3">
+                AI learns your thinking patterns over time to ask better questions.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleViewProfile}
+                  className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                >
+                  View Profile
+                </button>
+                <button
+                  onClick={handleUpdateProfile}
+                  disabled={profileUpdating}
+                  className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                >
+                  {profileUpdating ? "Updating..." : "Update Now"}
+                </button>
+              </div>
+            </div>
+
             {/* Actions */}
             <div className="flex gap-3 pt-2">
               <button
@@ -358,6 +441,170 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
           </div>
         )}
       </div>
+
+      {/* Profile Popup Modal */}
+      {profileModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70"
+          onClick={() => setProfileModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg max-h-[85dvh] overflow-y-auto bg-gray-900 border border-gray-700 rounded-2xl p-6 mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-100">Learner Profile</h3>
+              <button
+                onClick={() => setProfileModalOpen(false)}
+                className="text-gray-500 hover:text-gray-300 text-xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            {profileLoading ? (
+              <div className="text-center text-gray-500 py-10">Loading...</div>
+            ) : !profile ? (
+              <div className="text-center text-gray-500 py-10">
+                <p className="mb-4">No profile yet.</p>
+                <p className="text-xs text-gray-600">
+                  Have some thinking sessions, then click &quot;Update Now&quot; to analyze them.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4 text-sm">
+                <div className="text-xs text-gray-600">
+                  Last updated: {new Date(profile.lastUpdated).toLocaleString()}
+                </div>
+
+                {/* Personality */}
+                <div>
+                  <h4 className="text-gray-300 font-medium mb-2">Personality</h4>
+                  <div className="bg-gray-800 rounded-lg p-3 space-y-2">
+                    {profile.personality.thinkingStyle && (
+                      <div>
+                        <span className="text-gray-500">Thinking style: </span>
+                        <span className="text-gray-200">{profile.personality.thinkingStyle}</span>
+                      </div>
+                    )}
+                    {profile.personality.strengths.length > 0 && (
+                      <div>
+                        <span className="text-gray-500">Strengths: </span>
+                        <span className="text-emerald-400">{profile.personality.strengths.join(", ")}</span>
+                      </div>
+                    )}
+                    {profile.personality.weaknesses.length > 0 && (
+                      <div>
+                        <span className="text-gray-500">Weaknesses: </span>
+                        <span className="text-amber-400">{profile.personality.weaknesses.join(", ")}</span>
+                      </div>
+                    )}
+                    {profile.personality.responseToChallenge && (
+                      <div>
+                        <span className="text-gray-500">Response to challenge: </span>
+                        <span className="text-gray-200">{profile.personality.responseToChallenge}</span>
+                      </div>
+                    )}
+                    {!profile.personality.thinkingStyle &&
+                      profile.personality.strengths.length === 0 &&
+                      profile.personality.weaknesses.length === 0 &&
+                      !profile.personality.responseToChallenge && (
+                        <span className="text-gray-600 italic">Not yet observed</span>
+                      )}
+                  </div>
+                </div>
+
+                {/* Learning Patterns */}
+                <div>
+                  <h4 className="text-gray-300 font-medium mb-2">Learning Patterns</h4>
+                  <div className="bg-gray-800 rounded-lg p-3 space-y-2">
+                    {profile.learningPatterns.effectiveApproaches.length > 0 && (
+                      <div>
+                        <span className="text-gray-500">Effective approaches: </span>
+                        <span className="text-emerald-400">{profile.learningPatterns.effectiveApproaches.join(", ")}</span>
+                      </div>
+                    )}
+                    {profile.learningPatterns.needsHelpWith.length > 0 && (
+                      <div>
+                        <span className="text-gray-500">Needs help with: </span>
+                        <span className="text-amber-400">{profile.learningPatterns.needsHelpWith.join(", ")}</span>
+                      </div>
+                    )}
+                    {profile.learningPatterns.preferredQuestionStyle && (
+                      <div>
+                        <span className="text-gray-500">Preferred question style: </span>
+                        <span className="text-gray-200">{profile.learningPatterns.preferredQuestionStyle}</span>
+                      </div>
+                    )}
+                    {profile.learningPatterns.effectiveApproaches.length === 0 &&
+                      profile.learningPatterns.needsHelpWith.length === 0 &&
+                      !profile.learningPatterns.preferredQuestionStyle && (
+                        <span className="text-gray-600 italic">Not yet observed</span>
+                      )}
+                  </div>
+                </div>
+
+                {/* Session History */}
+                {profile.sessionHistory && profile.sessionHistory.length > 0 && (
+                  <div>
+                    <h4 className="text-gray-300 font-medium mb-2">
+                      Recent Sessions ({profile.sessionHistory.length})
+                    </h4>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {profile.sessionHistory.slice(-5).reverse().map((session, i) => {
+                        // Handle both schema variants from LLM
+                        const s = session as Record<string, unknown>;
+                        const dateStr = (s.date as string) || "";
+                        const topics = Array.isArray(s.topics)
+                          ? (s.topics as string[]).join(", ")
+                          : (s.topic as string) || "";
+                        const insight = (s.keyInsight as string) || (s.keyObservations as string) || "";
+                        const struggled = (s.struggledWith as string) || "";
+
+                        return (
+                          <div key={i} className="bg-gray-800 rounded-lg p-3 text-xs">
+                            {dateStr && (
+                              <div className="text-gray-500 mb-1">
+                                {new Date(dateStr).toLocaleDateString()}
+                              </div>
+                            )}
+                            {topics && (
+                              <div className="text-gray-400">
+                                Topics: {topics}
+                              </div>
+                            )}
+                            {insight && (
+                              <div className="text-emerald-400 mt-1">
+                                Insight: {insight}
+                              </div>
+                            )}
+                            {struggled && (
+                              <div className="text-amber-400 mt-1">
+                                Struggled: {struggled}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Update button inside modal */}
+                <div className="pt-2">
+                  <button
+                    onClick={handleUpdateProfile}
+                    disabled={profileUpdating}
+                    className="w-full py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                  >
+                    {profileUpdating ? "Analyzing sessions..." : "Update Profile Now"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
