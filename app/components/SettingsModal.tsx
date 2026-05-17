@@ -72,7 +72,7 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [profile, setProfile] = useState<LearnerProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
-  const [profileUpdating, setProfileUpdating] = useState(false);
+  const [profileResetting, setProfileResetting] = useState(false);
 
   const needsEndpoint = provider === "azure" || provider === "litellm";
   const needsModel = provider === "azure" || provider === "litellm";
@@ -199,13 +199,13 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
     }
   };
 
-  const handleUpdateProfile = async () => {
-    setProfileUpdating(true);
+  const handleResetProfile = async () => {
+    setProfileResetting(true);
     try {
       const res = await fetch("/api/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update" }),
+        body: JSON.stringify({ action: "reset" }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -214,7 +214,7 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
     } catch {
       // ignore
     } finally {
-      setProfileUpdating(false);
+      setProfileResetting(false);
     }
   };
 
@@ -409,11 +409,11 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
                   View Profile
                 </button>
                 <button
-                  onClick={handleUpdateProfile}
-                  disabled={profileUpdating}
-                  className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                  onClick={handleResetProfile}
+                  disabled={profileResetting}
+                  className="flex-1 py-2 bg-gray-800 hover:bg-red-900/50 hover:text-red-300 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
                 >
-                  {profileUpdating ? "Updating..." : "Update Now"}
+                  {profileResetting ? "Resetting..." : "Reset Profile"}
                 </button>
               </div>
             </div>
@@ -590,14 +590,14 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: Props) {
                   </div>
                 )}
 
-                {/* Update button inside modal */}
+                {/* Reset button inside modal */}
                 <div className="pt-2">
                   <button
-                    onClick={handleUpdateProfile}
-                    disabled={profileUpdating}
-                    className="w-full py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                    onClick={handleResetProfile}
+                    disabled={profileResetting}
+                    className="w-full py-2.5 bg-gray-800 hover:bg-red-900/50 hover:text-red-300 disabled:opacity-40 text-gray-300 text-sm font-medium rounded-lg transition-colors"
                   >
-                    {profileUpdating ? "Analyzing sessions..." : "Update Profile Now"}
+                    {profileResetting ? "Resetting..." : "Reset Profile"}
                   </button>
                 </div>
               </div>

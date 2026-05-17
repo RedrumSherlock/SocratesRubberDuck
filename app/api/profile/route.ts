@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readProfile } from "@/lib/learner-profile";
+import { readProfile, writeProfile, createEmptyProfile } from "@/lib/learner-profile";
 
 export async function GET() {
   try {
@@ -21,6 +21,13 @@ export async function POST(req: NextRequest) {
       await _runProfileUpdateManual();
       const profile = await readProfile();
       return NextResponse.json({ ok: true, profile });
+    }
+
+    if (body.action === "reset") {
+      // Reset to empty profile with epoch timestamp so all sessions are reprocessed
+      const emptyProfile = createEmptyProfile();
+      await writeProfile(emptyProfile);
+      return NextResponse.json({ ok: true, profile: emptyProfile });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
